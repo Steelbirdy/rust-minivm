@@ -1,0 +1,120 @@
+use crate::{parse::{ast, lexer::{TokenKind, LexerError}}, common::{self, Interner}};
+use text_size::{TextRange, TextSize};
+
+grammar(source: &str, interner: &mut Interner);
+
+pub Program: ast::Program = "\n"* <functions:Sep<Function>> "\n"* => {
+    ast::Program { functions }
+};
+
+Function: ast::Function = {
+    "func" <name:Lbl> "\n"+ <instructions:Sep<Instruction>> "\n"+ "end" => {
+        ast::Function { name, instructions }
+    },
+    "func" <name:Lbl> "\n"+ "end" => {
+        ast::Function { name, instructions: Vec::new() }
+    },
+};
+
+Instruction: ast::Instruction = {
+    "exit" => ast::Instruction::Exit,
+    "@" <name:Lbl> => ast::Instruction::Lbl { name },
+    <to:Reg> "<-" "copy" <from:Reg> => ast::Instruction::Copy { to, from },
+    "jump" <target:Target> => ast::Instruction::Jump { target },
+    "jumpez" <val:Val> <target:Lbl> => ast::Instruction::JumpEz { val, target },
+    "jumpnz" <val:Val> <target:Lbl> => ast::Instruction::JumpNz { val, target },
+    "jumplt" <lhs:Val> <rhs:Val> <target:Lbl> => ast::Instruction::JumpLt { lhs, rhs, target },
+    "jumpgt" <lhs:Val> <rhs:Val> <target:Lbl> => ast::Instruction::JumpGt { lhs, rhs, target },
+    "jumple" <lhs:Val> <rhs:Val> <target:Lbl> => ast::Instruction::JumpLe { lhs, rhs, target },
+    "jumpge" <lhs:Val> <rhs:Val> <target:Lbl> => ast::Instruction::JumpGe { lhs, rhs, target },
+    "jumpeq" <lhs:Val> <rhs:Val> <target:Lbl> => ast::Instruction::JumpEq { lhs, rhs, target },
+    "jumpne" <lhs:Val> <rhs:Val> <target:Lbl> => ast::Instruction::JumpNe { lhs, rhs, target },
+    <to:Reg> "<-" "call" <target:Target> <args:List<Reg>> => ast::Instruction::Call { to, target, args },
+    <to:Reg> "<-" "addr" <of:Lbl> => ast::Instruction::Addr { to, of },
+    "ret" <val:Val> => ast::Instruction::Ret { val },
+    <to:Reg> "<-" "int" <int:Int> => ast::Instruction::Int { to, int },
+    <to:Reg> "<-" "str" <str:Str> => ast::Instruction::Str { to, str },
+    <to:Reg> "<-" "add" <lhs:Val> <rhs:Val> => ast::Instruction::Add { to, lhs, rhs },
+    <to:Reg> "<-" "sub" <lhs:Val> <rhs:Val> => ast::Instruction::Sub { to, lhs, rhs },
+    <to:Reg> "<-" "mul" <lhs:Val> <rhs:Val> => ast::Instruction::Mul { to, lhs, rhs },
+    <to:Reg> "<-" "div" <lhs:Val> <rhs:Val> => ast::Instruction::Div { to, lhs, rhs },
+    <to:Reg> "<-" "mod" <lhs:Val> <rhs:Val> => ast::Instruction::Mod { to, lhs, rhs },
+    <to:Reg> "<-" "neg" <rhs:Val> => ast::Instruction::Neg { to, rhs },
+    "incr" <reg:Reg> => ast::Instruction::Incr { reg },
+    "decr" <reg:Reg> => ast::Instruction::Decr { reg },
+    <to:Reg> "<-" "arr" <len:Val> => ast::Instruction::Arr { to, len },
+    <to:Reg> "<-" "get" <arr:Reg> <idx:Val> => ast::Instruction::Get { to, arr, idx },
+    "set" <arr:Reg> <idx:Val> <val:Val> => ast::Instruction::Set { arr, idx, val },
+    <to:Reg> "<-" "len" <arr:Reg> => ast::Instruction::Len { to, arr },
+    <to:Reg> "<-" "type" <obj:Reg> => ast::Instruction::Type { to, obj },
+    "putc" <val:Val> => ast::Instruction::Putc { val },
+};
+
+Int: common::Int = <l:@L> "int lit" <r:@R> => source[TextRange::new(l, r)].parse().unwrap();
+Reg: common::Reg = <l:@L> "reg" <r:@R> => source[TextRange::new(l+TextSize::from(1), r)].parse().unwrap();
+Lbl: common::Key = <l:@L> "label" <r:@R> => interner.intern(&source[TextRange::new(l, r)]);
+Str: common::Key = <l:@L> "str lit" <r:@R> => interner.intern(&source[TextRange::new(l+TextSize::from(1), r)]);
+Val: ast::Val = {
+    Reg => ast::Val::Reg(<>),
+    Int => ast::Val::Int(<>),
+};
+Target: ast::Target = {
+    Reg => ast::Target::Reg(<>),
+    Lbl => ast::Target::Lbl(<>),
+};
+List<T>: common::List<T> = <T*> => common::List::from_iter(<>);
+
+#[inline]
+Sep<T>: Vec<T> = {
+    <first:T> <mut rest:("\n"+ <T>)*> => {
+         rest.insert(0, first);
+         rest
+    },
+};
+
+extern {
+    type Location = text_size::TextSize;
+    type Error = LexerError;
+
+    enum TokenKind {
+        "add" => TokenKind::Add,
+        "addr" => TokenKind::Addr,
+        "arr" => TokenKind::Arr,
+        "call" => TokenKind::Call,
+        "copy" => TokenKind::Copy,
+        "decr" => TokenKind::Decr,
+        "div" => TokenKind::Div,
+        "end" => TokenKind::End,
+        "exit" => TokenKind::Exit,
+        "func" => TokenKind::Func,
+        "get" => TokenKind::Get,
+        "incr" => TokenKind::Incr,
+        "int" => TokenKind::Int,
+        "jump" => TokenKind::Jump,
+        "jumpeq" => TokenKind::JumpEq,
+        "jumpez" => TokenKind::JumpEz,
+        "jumpge" => TokenKind::JumpGe,
+        "jumpgt" => TokenKind::JumpGt,
+        "jumple" => TokenKind::JumpLe,
+        "jumplt" => TokenKind::JumpLt,
+        "jumpne" => TokenKind::JumpNe,
+        "jumpnz" => TokenKind::JumpNz,
+        "len" => TokenKind::Len,
+        "mul" => TokenKind::Mul,
+        "neg" => TokenKind::Neg,
+        "putc" => TokenKind::Putc,
+        "mod" => TokenKind::Mod,
+        "ret" => TokenKind::Ret,
+        "set" => TokenKind::Set,
+        "str" => TokenKind::Str,
+        "sub" => TokenKind::Sub,
+        "type" => TokenKind::Type,
+        "<-" => TokenKind::Arrow,
+        "@" => TokenKind::At,
+        "int lit" => TokenKind::IntLiteral,
+        "str lit" => TokenKind::StringLiteral,
+        "label" => TokenKind::Label,
+        "reg" => TokenKind::Register,
+        "\n" => TokenKind::Newline,
+    }
+}
