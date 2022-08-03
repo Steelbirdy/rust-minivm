@@ -8,6 +8,11 @@ edition = "2021"
 [profile.release]
 debug = 1
 
+[features]
+default = ["check_bounds"]
+check_bounds = []
+unsafe = []
+
 [dependencies]
 clap = { version = "3.2", features = ["derive"] }
 codespan-reporting = "0.11"

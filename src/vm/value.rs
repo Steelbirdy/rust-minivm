@@ -39,6 +39,7 @@ impl FromBytes for Value {
         Repr::from_bytes(reader).map(Value)
     }
 
+    #[cfg(feature = "unsafe")]
     unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
         Value(Repr::from_bytes_unchecked(reader))
     }
@@ -95,13 +96,26 @@ impl Value {
         Self(Repr::from_le_bytes(bytes))
     }
 
+    #[cfg(feature = "unsafe")]
     #[must_use]
     pub const fn kind(self) -> ValueKind {
-        // SAFETY: The only possible values of (<int> & 1) are 0 and 1.
-        // Both 0u8 and 1u8 are valid ValueKinds (since ValueKind is repr(u8))
-        // Hence the resulting value is a valid ValueKind.
+        // SAFETY:
+        // * The only possible values of (<int> & 1) are 0 and 1.
+        // * Both 0u8 and 1u8 are valid ValueKinds.
+        // * Hence the resulting value is a valid ValueKind.
         // qed
         unsafe { std::mem::transmute((self.0 & 1) as u8) }
+    }
+
+    #[cfg(not(feature = "unsafe"))]
+    pub const fn kind(self) -> ValueKind {
+        debug_assert!(ValueKind::Int as u8 == 0 && ValueKind::Ptr as u8 == 1);
+
+        match self.0 & 1 {
+            0 => ValueKind::Int,
+            1 => ValueKind::Ptr,
+            _ => unreachable!(),
+        }
     }
 
     #[must_use]

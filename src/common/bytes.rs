@@ -1,9 +1,13 @@
 use std::cell::Cell;
-use std::mem::{size_of, MaybeUninit};
+use std::mem::size_of;
+
+#[cfg(feature = "unsafe")]
+use std::mem::MaybeUninit;
 
 pub trait FromBytes: Sized {
     fn from_bytes<R: Read>(reader: &R) -> Option<Self>;
 
+    #[cfg(feature = "unsafe")]
     unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self;
 }
 
@@ -15,20 +19,37 @@ impl<T, const N: usize> FromBytes for [T; N]
 where
     T: FromBytes,
 {
+    #[cfg(feature = "unsafe")]
     fn from_bytes<R: Read>(reader: &R) -> Option<Self> {
         if reader.len() - reader.offset() < size_of::<T>() * N {
             return None;
         }
         // FIXME: Replace with `MaybeUninit::uninit_array` once it is stable
         let mut ret: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
-        let offset = reader.offset();
+        let base_offset = reader.offset();
         for (i, init) in ret.iter_mut().enumerate() {
-            let offset = offset + i * size_of::<T>();
+            let offset = base_offset + i * size_of::<T>();
             init.write(reader.read_at(offset)?);
         }
         Some(unsafe { ret.as_ptr().cast::<T>().cast::<[T; N]>().read() })
     }
 
+    #[cfg(not(feature = "unsafe"))]
+    fn from_bytes<R: Read>(reader: &R) -> Option<Self> {
+        if reader.len() - reader.offset() < size_of::<T>() * N {
+            return None;
+        }
+
+        let base_offset = reader.offset();
+        let mut ret = Vec::with_capacity(N);
+        for i in 0..N {
+            let offset = base_offset + i * size_of::<T>();
+            ret.push(reader.read_at(offset)?);
+        }
+        ret.try_into().ok()
+    }
+
+    #[cfg(feature = "unsafe")]
     unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
         // FIXME: Replace with `MaybeUninit::uninit_array` once it is stable
         let mut ret: [MaybeUninit<T>; N] = MaybeUninit::uninit().assume_init();
@@ -49,6 +70,7 @@ macro_rules! int_bytes {
                 reader.read_bytes().map(Self::from_le_bytes)
             }
 
+            #[cfg(feature = "unsafe")]
             unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
                 Self::from_le_bytes(reader.read_bytes_unchecked())
             }
@@ -120,12 +142,14 @@ pub trait Read: Sized {
 
     fn read_byte_slice(&self, len: usize) -> Option<&[u8]>;
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_unchecked<T: FromBytes>(&self) -> T {
         T::from_bytes_unchecked(self)
     }
 
     /// # Safety
     /// See [`Read::read_unchecked`]
+    #[cfg(feature = "unsafe")]
     unsafe fn read_at_unchecked<T: FromBytes>(&self, offset: usize) -> T {
         let prev_offset = self.offset();
         self.set_offset(offset);
@@ -136,16 +160,20 @@ pub trait Read: Sized {
 
     /// # Safety
     /// See [`Read::read_unchecked`]
+    #[cfg(feature = "unsafe")]
     unsafe fn take_unchecked<T: FromBytes>(&self) -> T {
         let ret = self.read_unchecked();
         self.skip::<T>();
         ret
     }
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_byte_unchecked(&self) -> u8;
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_bytes_unchecked<const N: usize>(&self) -> [u8; N];
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_byte_slice_unchecked(&self, len: usize) -> &[u8];
 }
 
@@ -190,14 +218,17 @@ impl<T: Read> Read for &T {
         T::read_byte_slice(self, len)
     }
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_byte_unchecked(&self) -> u8 {
         T::read_byte_unchecked(self)
     }
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_bytes_unchecked<const N: usize>(&self) -> [u8; N] {
         T::read_bytes_unchecked(self)
     }
 
+    #[cfg(feature = "unsafe")]
     unsafe fn read_byte_slice_unchecked(&self, len: usize) -> &[u8] {
         T::read_byte_slice_unchecked(self, len)
     }
@@ -249,13 +280,10 @@ impl<B: AsRef<[u8]>> Read for ByteBuffer<B> {
 
     fn read_byte(&self) -> Option<u8> {
         let code = self.code.as_ref();
-        let offset = self.cursor.get();
-        if offset + 1 > code.len() {
-            return None;
-        }
-        Some(code[offset])
+        code.get(self.cursor.get()).copied()
     }
 
+    #[cfg(feature = "unsafe")]
     fn read_bytes<const N: usize>(&self) -> Option<[u8; N]> {
         let code = self.code.as_ref();
         let offset = self.cursor.get();
@@ -271,18 +299,24 @@ impl<B: AsRef<[u8]>> Read for ByteBuffer<B> {
         Some(ret)
     }
 
-    fn read_byte_slice(&self, len: usize) -> Option<&[u8]> {
+    #[cfg(not(feature = "unsafe"))]
+    fn read_bytes<const N: usize>(&self) -> Option<[u8; N]> {
         let code = self.code.as_ref();
         let offset = self.cursor.get();
 
-        if offset + len > code.len() {
-            return None;
-        }
-        Some(&code[offset..offset + len])
+        let slice = code.get(offset..offset + N)?;
+        slice.try_into().ok()
+    }
+
+    fn read_byte_slice(&self, len: usize) -> Option<&[u8]> {
+        let code = self.code.as_ref();
+        let offset = self.cursor.get();
+        code.get(offset..offset + len)
     }
 
     /// # Safety
     /// The buffer must have at least one byte left to read.
+    #[cfg(feature = "unsafe")]
     unsafe fn read_byte_unchecked(&self) -> u8 {
         let code = self.code.as_ref();
         let offset = self.cursor.get();
@@ -291,6 +325,7 @@ impl<B: AsRef<[u8]>> Read for ByteBuffer<B> {
 
     /// # Safety
     /// The buffer must have at least `N` bytes left to read.
+    #[cfg(feature = "unsafe")]
     unsafe fn read_bytes_unchecked<const N: usize>(&self) -> [u8; N] {
         let code = self.code.as_ref();
         let offset = self.cursor.get();
@@ -302,6 +337,7 @@ impl<B: AsRef<[u8]>> Read for ByteBuffer<B> {
 
     /// # Safety
     /// The buffer must have at least `len` bytes left to read.
+    #[cfg(feature = "unsafe")]
     unsafe fn read_byte_slice_unchecked(&self, len: usize) -> &[u8] {
         let code = self.code.as_ref();
         let offset = self.cursor.get();
@@ -320,6 +356,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> Write for ByteBuffer<B> {
         Some(1)
     }
 
+    #[cfg(feature = "unsafe")]
     fn write_bytes<const N: usize>(&mut self, bytes: [u8; N]) -> Option<usize> {
         let offset = self.offset();
         if offset + N > self.len() {
@@ -332,6 +369,18 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> Write for ByteBuffer<B> {
         Some(N)
     }
 
+    #[cfg(not(feature = "unsafe"))]
+    fn write_bytes<const N: usize>(&mut self, bytes: [u8; N]) -> Option<usize> {
+        let offset = self.offset();
+        let code = self.code.as_mut();
+        let slice = code.get_mut(offset..offset + N)?;
+        for (to, from) in slice.iter_mut().zip(bytes) {
+            *to = from;
+        }
+        Some(N)
+    }
+
+    #[cfg(feature = "unsafe")]
     fn write_byte_slice(&mut self, bytes: &[u8]) -> Option<usize> {
         let offset = self.offset();
         if offset + bytes.len() > self.len() {
@@ -340,6 +389,17 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> Write for ByteBuffer<B> {
         unsafe {
             let ptr = self.code.as_mut().as_mut_ptr().add(offset);
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        }
+        Some(bytes.len())
+    }
+
+    #[cfg(not(feature = "unsafe"))]
+    fn write_byte_slice(&mut self, bytes: &[u8]) -> Option<usize> {
+        let offset = self.offset();
+        let code = self.code.as_mut();
+        let slice = code.get_mut(offset..offset + bytes.len())?;
+        for (to, &from) in slice.iter_mut().zip(bytes) {
+            *to = from;
         }
         Some(bytes.len())
     }

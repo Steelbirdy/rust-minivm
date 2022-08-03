@@ -1,13 +1,16 @@
-use std::mem::MaybeUninit;
+#[cfg(not(feature = "unsafe"))]
+pub type Stack<T, const CAP: usize> = smallvec::SmallVec<[T; CAP]>;
 
+#[cfg(feature = "unsafe")]
 pub struct Stack<T, const CAP: usize> {
-    arr: [MaybeUninit<T>; CAP],
+    arr: [std::mem::MaybeUninit<T>; CAP],
     len: usize,
 }
 
+#[cfg(feature = "unsafe")]
 impl<T, const CAP: usize> Stack<T, CAP> {
     pub const fn new() -> Self {
-        let arr: [MaybeUninit<T>; CAP] = unsafe { MaybeUninit::uninit().assume_init() };
+        let arr: [std::mem::MaybeUninit<T>; CAP] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         Self { arr, len: 0 }
     }
 

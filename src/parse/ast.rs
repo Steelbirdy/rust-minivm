@@ -52,6 +52,7 @@ pub enum NodeKind {
     Error,
 }
 
+#[allow(unsafe_code)]
 #[allow(clippy::cast_possible_truncation)]
 unsafe impl SyntaxKind for NodeKind {
     fn to_raw(self) -> u16 {

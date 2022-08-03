@@ -1,34 +1,35 @@
+#[cfg(feature = "unsafe")]
 use std::mem;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Key(lasso::Spur);
 
+#[cfg(feature = "unsafe")]
 impl Key {
-    pub fn from_raw(raw: u32) -> Self {
-        assert_ne!(raw, 0, "key cannot be 0");
-        // SAFETY: `raw != 0`
-        unsafe { Self::from_raw_unchecked(raw) }
-    }
-
     /// # Safety
     /// `raw` must not be 0.
-    pub const unsafe fn from_raw_unchecked(raw: u32) -> Self {
+    const unsafe fn from_raw_unchecked(raw: u32) -> Self {
         // Spur is repr(transparent) with NonZeroU32.
         // As long as the above condition holds, this is safe.
         Self(mem::transmute(raw))
-    }
-
-    pub const fn to_raw(self) -> u32 {
-        // SAFETY: Spur is repr(transparent) with NonZeroU32.
-        // Every possible bit pattern of NonZeroU32 is also a valid
-        // bit pattern for u32.
-        unsafe { mem::transmute(self.0) }
     }
 
     pub const fn entry_point() -> Self {
         unsafe { Self::from_raw_unchecked(1) }
     }
 }
+
+#[cfg(not(feature = "unsafe"))]
+impl Key {
+    fn from_raw(raw: usize) -> Option<Self> {
+        lasso::Key::try_from_usize(raw).map(Key)
+    }
+
+    pub fn entry_point() -> Self {
+        Self::from_raw(1).unwrap()
+    }
+}
+
 pub struct Interner {
     inner: lasso::Rodeo,
 }

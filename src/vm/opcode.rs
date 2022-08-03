@@ -438,7 +438,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 let ptr = gc.alloc(len);
                 for i in 0..usize::try_from(len).unwrap() {
                     let ch = code.take::<Int>().unwrap();
-                    gc.array_mut(ptr)[i] = Value::int(ch);
+                    *gc.get_mut(ptr, i) = Value::int(ch);
                 }
                 let to = code.take::<Reg>().unwrap();
                 write![Opcode::Value, Value::ptr_unchecked(ptr), to];
@@ -590,9 +590,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
     let mut editor = writer.as_mut();
     for (i, addr) in froms {
         let new_addr = locs[&usize::try_from(addr).unwrap()];
-        // println!("inserting address {new_addr}")
         editor.set_offset(i);
-        // dbg!(editor.read::<Addr>().unwrap());
         editor.write::<Addr>(new_addr.try_into().unwrap());
     }
 
@@ -604,6 +602,7 @@ impl FromBytes for Opcode {
         reader.read_byte().and_then(Self::from_raw)
     }
 
+    #[cfg(feature = "unsafe")]
     unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
         Self::from_raw_unchecked(reader.read_byte_unchecked())
     }
@@ -765,16 +764,21 @@ pub enum Opcode {
 }
 
 impl Opcode {
-    pub const MAX: u8 = Self::__MAX as u8;
-
+    #[allow(unsafe_code)]
     pub fn from_raw(raw: u8) -> Option<Self> {
-        if raw > Self::MAX {
+        if raw > Self::__MAX as u8 {
             return None;
         }
+        // SAFETY:
+        // * All discriminants in the range 0..(Self::__MAX as u8) are valid Opcode variants.
+        // * We just checked that `raw` is in this range.
+        // * Hence `raw` is a valid Opcode variant.
+        // qed
         Some(unsafe { Self::from_raw_unchecked(raw) })
     }
 
-    pub unsafe fn from_raw_unchecked(raw: u8) -> Self {
+    #[allow(unsafe_code)]
+    unsafe fn from_raw_unchecked(raw: u8) -> Self {
         std::mem::transmute(raw)
     }
 

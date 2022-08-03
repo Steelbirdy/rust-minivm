@@ -24,10 +24,6 @@ impl Ptr {
     pub(in crate::vm) const fn from_le_bytes(bytes: [u8; std::mem::size_of::<Ptr>()]) -> Self {
         Self(usize::from_le_bytes(bytes))
     }
-
-    pub(in crate::vm) const fn to_le_bytes(self) -> [u8; std::mem::size_of::<Ptr>()] {
-        self.0.to_le_bytes()
-    }
 }
 
 #[derive(Copy, Clone)]
@@ -68,6 +64,7 @@ union RawGcData {
 #[repr(transparent)]
 struct GcData(RawGcData);
 
+#[allow(unsafe_code)]
 impl GcData {
     pub fn new_header(marked: bool, kind: ValueKind, len: Len) -> Self {
         let header = GcHeader {
@@ -76,10 +73,6 @@ impl GcData {
             size: len,
         };
         Self(RawGcData { header })
-    }
-
-    pub fn new_value(value: Value) -> Self {
-        Self(RawGcData { value })
     }
 
     pub fn header(self) -> GcHeader {
@@ -157,36 +150,34 @@ impl Gc {
         self.buf[ptr.0 - 1].header().size
     }
 
+    #[cfg(feature = "check_bounds")]
     #[must_use]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
         self.buf[ptr.0 - 1].header().len()
     }
 
-    #[must_use]
-    pub fn array(&self, ptr: Ptr) -> &[Value] {
-        let len = self.array_len(ptr) as usize;
-        assert!(ptr.0 + len <= self.buf.len());
-        // SAFETY:
-        // * `GcData` has the same layout as `Value` since
-        //   `GcData` is a union with `Value` as one of its fields.
-        // * The slice below is equivalent to &self.buf[start..start + len]
-        //   except in type. Since we assert that these indices are in bounds,
-        //   the slice is in bounds.
-        // qed
-        unsafe {
-            let ptr = self.buf.as_ptr().add(ptr.0);
-            std::slice::from_raw_parts(ptr.cast::<Value>(), len)
+    #[cfg(feature = "check_bounds")]
+    fn check_bounds(&self, ptr: Ptr, idx: usize) {
+        let len = self.array_len_usize(ptr);
+        if idx >= len {
+            panic!("array index out of bounds: the length is {len} but the index is {idx}")
         }
     }
 
     #[must_use]
-    pub fn array_mut(&mut self, ptr: Ptr) -> &mut [Value] {
-        let len = self.array_len_usize(ptr);
-        // SAFETY: See `Gc::array`.
-        unsafe {
-            let ptr = self.buf.as_mut_ptr().add(ptr.0);
-            std::slice::from_raw_parts_mut(ptr.cast::<Value>(), len)
-        }
+    pub fn get(&self, ptr: Ptr, idx: usize) -> Value {
+        #[cfg(feature = "check_bounds")]
+        self.check_bounds(ptr, idx);
+
+        self.buf[ptr.0 + idx].value()
+    }
+
+    #[must_use]
+    pub fn get_mut(&mut self, ptr: Ptr, idx: usize) -> &mut Value {
+        #[cfg(feature = "check_bounds")]
+        self.check_bounds(ptr, idx);
+
+        self.buf[ptr.0 + idx].value_mut()
     }
 
     #[must_use]
@@ -315,21 +306,5 @@ impl IndexMut<Reg> for Gc {
     fn index_mut(&mut self, reg: Reg) -> &mut Self::Output {
         let index: usize = reg.into();
         &mut self.registers[self.frame_start + index]
-    }
-}
-
-impl Index<Ptr> for Gc {
-    type Output = [Value];
-
-    #[inline]
-    fn index(&self, ptr: Ptr) -> &Self::Output {
-        self.array(ptr)
-    }
-}
-
-impl IndexMut<Ptr> for Gc {
-    #[inline]
-    fn index_mut(&mut self, ptr: Ptr) -> &mut Self::Output {
-        self.array_mut(ptr)
     }
 }

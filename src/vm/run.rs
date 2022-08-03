@@ -42,15 +42,26 @@ impl<'a> Vm<'a> {
         self.gc[OUT]
     }
 
+    #[cfg(feature = "unsafe")]
     fn next(&mut self) {
+        if self.config.trace_execution {
+            self.debug_next();
+        }
         unsafe {
-            if self.config.trace_execution {
-                self.debug_next();
-            }
             let opcode = self.code.take_unchecked::<Opcode>();
             let func = OPCODE_FN_PTRS.get_unchecked(opcode as usize);
             func(self);
         }
+    }
+
+    #[cfg(not(feature = "unsafe"))]
+    fn next(&mut self) {
+        if self.config.trace_execution {
+            self.debug_next();
+        }
+        let opcode = self.code.take::<Opcode>().unwrap();
+        let func = OPCODE_FN_PTRS[opcode as usize];
+        func(self);
     }
 
     fn debug_next(&mut self) {
@@ -75,6 +86,7 @@ impl<'a> Vm<'a> {
         self.code.set_offset(addr);
     }
 
+    #[cfg(feature = "unsafe")]
     fn pop_frame(&mut self) {
         let offset = if let Some(offset) = self.call_stack.pop() {
             self.code.set_offset(offset);
@@ -84,6 +96,19 @@ impl<'a> Vm<'a> {
             return;
         };
         let num_regs = unsafe { self.code.read_at_unchecked::<Reg>(offset) };
+        self.gc.pop_frame(num_regs);
+    }
+
+    #[cfg(not(feature = "unsafe"))]
+    fn pop_frame(&mut self) {
+        let offset = if let Some(offset) = self.call_stack.pop() {
+            self.code.set_offset(offset);
+            offset - std::mem::size_of::<Reg>()
+        } else {
+            self.stop = true;
+            return;
+        };
+        let num_regs = self.code.read_at::<Reg>(offset).unwrap();
         self.gc.pop_frame(num_regs);
     }
 }
@@ -99,9 +124,17 @@ static OPCODE_FN_PTRS: &[OpcodeFn] = &[
     arr_i, get_r, get_i, set_ii, set_rr, set_ri, set_ir, len, r#type, putc_r, putc_i, __max,
 ];
 
+#[cfg(feature = "unsafe")]
 macro_rules! take {
     ($vm:ident, $ty:ty) => {
         unsafe { $vm.code.take_unchecked::<$ty>() }
+    };
+}
+
+#[cfg(not(feature = "unsafe"))]
+macro_rules! take {
+    ($vm:ident, $ty:ty) => {
+        $vm.code.take::<$ty>().unwrap()
     };
 }
 
@@ -384,41 +417,41 @@ fn arr_i(vm: &mut Vm) {
 fn get_r(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = load!(vm).as_int_unchecked();
-    *load!(mut vm) = vm.gc.array(arr)[idx as usize];
+    *load!(mut vm) = vm.gc.get(arr, idx as usize);
 }
 
 fn get_i(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = take!(vm, Int);
-    *load!(mut vm) = vm.gc.array(arr)[idx as usize];
+    *load!(mut vm) = vm.gc.get(arr, idx as usize);
 }
 
 fn set_ii(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = take!(vm, Int);
     let val = take!(vm, Value);
-    vm.gc.array_mut(arr)[idx as usize] = val;
+    *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
 fn set_rr(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = load!(vm).as_int_unchecked();
     let val = load!(vm);
-    vm.gc.array_mut(arr)[idx as usize] = val;
+    *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
 fn set_ri(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = load!(vm).as_int_unchecked();
     let val = take!(vm, Value);
-    vm.gc.array_mut(arr)[idx as usize] = val;
+    *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
 fn set_ir(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = take!(vm, Int);
     let val = take!(vm, Value);
-    vm.gc.array_mut(arr)[idx as usize] = val;
+    *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
 fn len(vm: &mut Vm) {

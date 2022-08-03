@@ -151,6 +151,7 @@ impl TokenKind {
     }
 }
 
+#[allow(unsafe_code)]
 unsafe impl SyntaxKind for TokenKind {
     fn to_raw(self) -> u16 {
         self as u16
