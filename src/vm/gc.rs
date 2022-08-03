@@ -159,9 +159,10 @@ impl Gc {
     #[cfg(feature = "check_bounds")]
     fn check_bounds(&self, ptr: Ptr, idx: usize) {
         let len = self.array_len_usize(ptr);
-        if idx >= len {
-            panic!("array index out of bounds: the length is {len} but the index is {idx}")
-        }
+        assert!(
+            idx >= len,
+            "array index out of bounds: the length is {len} but the index is {idx}"
+        );
     }
 
     #[must_use]

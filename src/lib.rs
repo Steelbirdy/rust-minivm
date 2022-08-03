@@ -11,22 +11,32 @@ mod compile;
 mod parse;
 mod vm;
 
+pub use common::config::Diagnostic;
 pub use common::{config, ByteReader, Interner, Read};
 pub use compile::{assemble, disassemble as disassemble_bytecode};
-pub use parse::{lex, parse};
+pub use parse::{lex, parse, validate};
 pub use vm::{disassemble as disassemble_opcode, lower_bytecode, trace_jumps, Gc, Value, Vm};
 
-pub fn run(process: &config::Process) -> Option<Value> {
+use common::config::VmDiagnostic;
+
+pub fn run(process: &config::Process) -> Result<Value, Vec<Diagnostic>> {
     let mut interner = Interner::new();
     let mut gc = Gc::new();
 
     // Parsing (source -> AST)
     let parse_result = parse(process.source);
     if parse_result.has_errors() {
-        for error in parse_result.errors() {
-            eprintln!("{error}");
-        }
-        return None;
+        return Err(parse_result
+            .errors()
+            .iter()
+            .map(|err| err.to_diagnostic(process))
+            .collect());
+    }
+    if let Err(errors) = validate(parse_result.syntax_tree()) {
+        return Err(errors
+            .iter()
+            .map(|err| err.to_diagnostic(process))
+            .collect());
     }
 
     // Assembly (AST -> bytecode)
@@ -50,5 +60,9 @@ pub fn run(process: &config::Process) -> Option<Value> {
     if process.config.trace_execution {
         println!("=== EXECUTION ===");
     }
-    Some(Vm::new(opcode, gc, &process.config).run())
+    let ret = Vm::new(opcode, gc, &process.config).run();
+    if process.config.trace_execution {
+        println!("===           ===");
+    }
+    Ok(ret)
 }

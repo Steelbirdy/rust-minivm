@@ -3,6 +3,7 @@ mod error;
 mod lexer;
 mod parser;
 
+pub use ast::validate;
 pub use error::ParseError;
 pub use lexer::{lex, TokenKind};
 

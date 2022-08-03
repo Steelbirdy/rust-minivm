@@ -14,13 +14,17 @@ unsafe = []
 [dependencies]
 clap = { version = "3.2", features = ["derive"] }
 codespan-reporting = "0.11"
-eventree_wrapper = { git = "https://github.com/Steelbirdy/eventree_wrapper", features = ["logos"] }
 lasso = "0.6"
 lazy_static = "1.4"
 logos = "0.12"
 rustc-hash = "1.1"
 smallvec = "1.9"
 text-size = "1.1"
+
+[dependencies.eventree_wrapper]
+git = "https://github.com/Steelbirdy/eventree_wrapper"
+branch = "dev"
+features = ["logos"]
 
 [dev-dependencies]
 expect-test = "1.4"

@@ -108,6 +108,7 @@ impl Value {
     }
 
     #[cfg(not(feature = "unsafe"))]
+    #[must_use]
     pub const fn kind(self) -> ValueKind {
         debug_assert!(ValueKind::Int as u8 == 0 && ValueKind::Ptr as u8 == 1);
 

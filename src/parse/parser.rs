@@ -1,5 +1,6 @@
 use crate::parse::{ast::NodeKind, ParseConfig, ParseError, TokenKind};
 use eventree_wrapper::parser::{self, CompletedMarker, SimpleTokens, TokenSet};
+use text_size::TextRange;
 
 pub type Parser<'t> = parser::Parser<ParseConfig, &'t SimpleTokens<TokenKind>>;
 
@@ -31,7 +32,7 @@ lazy_static::lazy_static! {
     ]);
 }
 
-pub fn assembly(p: &mut Parser) {
+pub(in crate::parse) fn assembly(p: &mut Parser) {
     let marker = p.start();
     while !p.is_at_end() {
         while p.is_at(TokenKind::LineBreak) {
@@ -48,6 +49,7 @@ pub fn assembly(p: &mut Parser) {
 fn function(p: &mut Parser) {
     let marker = p.start();
     p.expect(TokenKind::Func);
+    let func_start = p.previous_range();
     p.expect(TokenKind::Label);
 
     loop {
@@ -55,7 +57,7 @@ fn function(p: &mut Parser) {
         if p.is_at(TokenKind::End) {
             break;
         }
-        instruction(p);
+        instruction(p, func_start);
     }
     p.expect(TokenKind::End);
     p.complete(marker, NodeKind::Function);
@@ -63,7 +65,7 @@ fn function(p: &mut Parser) {
 
 macro_rules! make_instruction_func {
     [$($kind:tt $($expect_kind:ident)? = [$($first:tt $($expect:ident)?),* $(,)?] => $out:ident;)*] => {
-        fn instruction(p: &mut Parser) -> Option<CompletedMarker> {
+        fn instruction(p: &mut Parser, func_start: TextRange) -> Option<CompletedMarker> {
             if p.is_at(TokenKind::Register) {
                 register_instruction(p)
             } else if p.is_at(TokenKind::At) {
@@ -72,12 +74,9 @@ macro_rules! make_instruction_func {
                 p.expect(TokenKind::Label);
                 Some(p.complete(marker, NodeKind::LabelDef))
             } else if p.is_at(TokenKind::Func) {
-                let marker = p.start();
-                let _guard = p.expected("instruction or `end`");
-                let range = p.peek_range().unwrap();
-                p.custom_error(ParseError::NestedFunction { range });
-                p.bump();
-                Some(p.complete(marker, NodeKind::Error))
+                let inner_func_range = p.peek_range().unwrap();
+                p.custom_error(ParseError::NestedFunction { outer_func_range: func_start, inner_func_range });
+                Some(p.recover())
             }
             $(
             else if make_instruction_func!(@cond p $kind $($expect_kind)?) {
@@ -90,7 +89,7 @@ macro_rules! make_instruction_func {
             }
             )*
             else {
-                let _guard = p.expected("instruction");
+                let _guard = p.expected("instruction name, `@`, register, or `end`");
                 p.error()
             }
         }

@@ -2,15 +2,21 @@ use crate::{common::ENTRY_POINT_LBL, parse::ParseError};
 use eventree_wrapper::{
     ast_node, ast_token,
     eventree::{SyntaxKind, SyntaxTree},
-    syntax_tree::AstToken,
+    syntax_tree::{AstNode, AstToken},
 };
 
-pub fn validate(root: Root, tree: &SyntaxTree<Cfg>) -> Vec<ParseError> {
+pub fn validate(tree: &SyntaxTree<Cfg>) -> Result<(), Vec<ParseError>> {
+    let root = Root::cast(tree.root(), tree).unwrap();
     let mut errors = Vec::new();
     if root.entry_point(tree).is_none() {
         errors.push(ParseError::NoEntryPoint);
     }
-    errors
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -119,8 +125,8 @@ ast_node! { <Cfg> pub LabelDef
 }
 ast_node! { <Cfg> pub InstrAdd
     fn to = token(Register);
-    fn lhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
-    fn rhs = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn lhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn rhs = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrAddr
     fn to = token(Register);
@@ -128,11 +134,11 @@ ast_node! { <Cfg> pub InstrAddr
 }
 ast_node! { <Cfg> pub InstrArr
     fn to = token(Register);
-    fn len = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn len = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrCall
     fn to = token(Register);
-    fn func = tokens(LblOrReg).nth(1) -> { Option<LblOrReg> };
+    fn func = tokens(LblOrReg).nth(1) -> Option<LblOrReg>;
 }
 impl InstrCall {
     pub fn args(self, tree: &SyntaxTree<Cfg>) -> impl Iterator<Item = Register> + '_ {
@@ -149,21 +155,21 @@ impl InstrCall {
 }
 ast_node! { <Cfg> pub InstrCopy
     fn to = token(Register);
-    fn from = tokens(Register).nth(1) -> { Option<Register> };
+    fn from = tokens(Register).nth(1) -> Option<Register>;
 }
 ast_node! { <Cfg> pub InstrDecr
     fn reg = token(Register);
 }
 ast_node! { <Cfg> pub InstrDiv
     fn to = token(Register);
-    fn lhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
-    fn rhs = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn lhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn rhs = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrExit }
 ast_node! { <Cfg> pub InstrGet
     fn to = token(Register);
-    fn arr = tokens(Register).nth(1) -> { Option<Register> };
-    fn idx = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn arr = tokens(Register).nth(1) -> Option<Register>;
+    fn idx = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrIncr
     fn reg = token(Register);
@@ -177,7 +183,7 @@ ast_node! { <Cfg> pub InstrJump
 }
 ast_node! { <Cfg> pub InstrJumpEq
     fn lhs = token(IntOrReg);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
     fn addr = token(Label);
 }
 ast_node! { <Cfg> pub InstrJumpEz
@@ -186,27 +192,27 @@ ast_node! { <Cfg> pub InstrJumpEz
 }
 ast_node! { <Cfg> pub InstrJumpGe
     fn lhs = token(IntOrReg);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
     fn addr = token(Label);
 }
 ast_node! { <Cfg> pub InstrJumpGt
     fn lhs = token(IntOrReg);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
     fn addr = token(Label);
 }
 ast_node! { <Cfg> pub InstrJumpLe
     fn lhs = token(IntOrReg);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
     fn addr = token(Label);
 }
 ast_node! { <Cfg> pub InstrJumpLt
     fn lhs = token(IntOrReg);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
     fn addr = token(Label);
 }
 ast_node! { <Cfg> pub InstrJumpNe
     fn lhs = token(IntOrReg);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
     fn addr = token(Label);
 }
 ast_node! { <Cfg> pub InstrJumpNz
@@ -215,21 +221,21 @@ ast_node! { <Cfg> pub InstrJumpNz
 }
 ast_node! { <Cfg> pub InstrLen
     fn to = token(Register);
-    fn arr = tokens(Register).nth(1) -> { Option<Register> };
+    fn arr = tokens(Register).nth(1) -> Option<Register>;
 }
 ast_node! { <Cfg> pub InstrMod
     fn to = token(Register);
-    fn lhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
-    fn rhs = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn lhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn rhs = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrMul
     fn to = token(Register);
-    fn lhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
-    fn rhs = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn lhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn rhs = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrNeg
     fn to = token(Register);
-    fn rhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrPutc
     fn char = token(IntOrReg);
@@ -239,8 +245,8 @@ ast_node! { <Cfg> pub InstrRet
 }
 ast_node! { <Cfg> pub InstrSet
     fn arr = token(Register);
-    fn idx = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
-    fn val = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn idx = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn val = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrStr
     fn to = token(Register);
@@ -248,12 +254,12 @@ ast_node! { <Cfg> pub InstrStr
 }
 ast_node! { <Cfg> pub InstrSub
     fn to = token(Register);
-    fn lhs = tokens(IntOrReg).nth(1) -> { Option<IntOrReg> };
-    fn rhs = tokens(IntOrReg).nth(2) -> { Option<IntOrReg> };
+    fn lhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn rhs = tokens(IntOrReg).nth(2) -> Option<IntOrReg>;
 }
 ast_node! { <Cfg> pub InstrType
     fn to = token(Register);
-    fn obj = tokens(Register).nth(1) -> { Option<Register> };
+    fn obj = tokens(Register).nth(1) -> Option<Register>;
 }
 
 ast_token! { <Cfg> pub CharOrInt => [Char(CharLiteral), Int(IntLiteral)] }
