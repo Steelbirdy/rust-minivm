@@ -7,6 +7,7 @@ func fib
     r3 <- copy r1
     r0 <- int 0
     r1 <- int 1
+    decr r3
 @fib.loop
     r2 <- add r0 r1
     r0 <- copy r1

@@ -25,7 +25,7 @@ impl JumpSet {
     }
 
     pub fn insert(&mut self, jump: Jump) {
-        self.0 |= jump as u8
+        self.0 |= jump as u8;
     }
 }
 
@@ -75,6 +75,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
 
         let opcode = code.take::<Bytecode>().unwrap();
         match opcode {
+            Bytecode::Missing => {}
             Bytecode::Exit => {
                 op_flags.insert(Jump::Out);
             }
@@ -87,7 +88,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             Bytecode::Jump => jump_op![],
             Bytecode::JumpEz | Bytecode::JumpNz => jump_op![Reg],
             Bytecode::JumpLtRR | Bytecode::JumpLeRR | Bytecode::JumpEqRR | Bytecode::JumpNeRR => {
-                jump_op![Reg, Reg]
+                jump_op![Reg, Reg];
             }
             Bytecode::JumpLtRI
             | Bytecode::JumpLeRI
@@ -95,16 +96,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             | Bytecode::JumpLeIR
             | Bytecode::JumpEqIR
             | Bytecode::JumpNeIR => jump_op![Int, Reg],
-            Bytecode::Call0 => skip![Addr, [Reg; 0], Reg],
-            Bytecode::Call1 => skip![Addr, [Reg; 1], Reg],
-            Bytecode::Call2 => skip![Addr, [Reg; 2], Reg],
-            Bytecode::Call3 => skip![Addr, [Reg; 3], Reg],
-            Bytecode::Call4 => skip![Addr, [Reg; 4], Reg],
-            Bytecode::Call5 => skip![Addr, [Reg; 5], Reg],
-            Bytecode::Call6 => skip![Addr, [Reg; 6], Reg],
-            Bytecode::Call7 => skip![Addr, [Reg; 7], Reg],
-            Bytecode::Call8 => skip![Addr, [Reg; 8], Reg],
-            Bytecode::CallV => {
+            Bytecode::Call => {
                 code.skip::<Addr>();
                 let num_args = code.take::<Int>().unwrap();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
@@ -115,16 +107,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
                 op_flags.insert(Jump::Out);
                 code.skip::<Reg>();
             }
-            Bytecode::DCall0 => skip![Reg, [Reg; 0], Reg],
-            Bytecode::DCall1 => skip![Reg, [Reg; 1], Reg],
-            Bytecode::DCall2 => skip![Reg, [Reg; 2], Reg],
-            Bytecode::DCall3 => skip![Reg, [Reg; 3], Reg],
-            Bytecode::DCall4 => skip![Reg, [Reg; 4], Reg],
-            Bytecode::DCall5 => skip![Reg, [Reg; 5], Reg],
-            Bytecode::DCall6 => skip![Reg, [Reg; 6], Reg],
-            Bytecode::DCall7 => skip![Reg, [Reg; 7], Reg],
-            Bytecode::DCall8 => skip![Reg, [Reg; 8], Reg],
-            Bytecode::DCallV => {
+            Bytecode::DCall => {
                 code.skip::<Reg>();
                 let num_args = code.take::<Int>().unwrap();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
@@ -149,7 +132,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             | Bytecode::MulRR
             | Bytecode::DivRR
             | Bytecode::ModRR => {
-                skip![Reg, Reg, Reg]
+                skip![Reg, Reg, Reg];
             }
             Bytecode::AddIR
             | Bytecode::SubRI
@@ -196,17 +179,6 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
         }};
     }
 
-    macro_rules! call {
-        ($num_args:literal) => {{
-            let addr = code.take::<Addr>().unwrap();
-            let offset = addr_to_usize(addr);
-            skip![[Reg; $num_args], Reg];
-            code.at_offset(offset, || {
-                trace_jumps_reachable(code, jumps);
-            });
-        }};
-    }
-
     if jumps[code.offset()].contains(Jump::Reach) {
         return;
     }
@@ -215,13 +187,15 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
         op_jumps.insert(Jump::Reach);
         let opcode = code.take::<Bytecode>().unwrap();
         match opcode {
+            // Can't make any assumptions about missing code
+            Bytecode::Missing => return,
             Bytecode::Exit => return,
             Bytecode::Func => skip![Addr, Reg],
             Bytecode::Copy => skip![Reg, Reg],
             Bytecode::Jump => jump_op![],
             Bytecode::JumpEz | Bytecode::JumpNz => jump_op![Reg],
             Bytecode::JumpLtRR | Bytecode::JumpLeRR | Bytecode::JumpEqRR | Bytecode::JumpNeRR => {
-                jump_op![Reg, Reg]
+                jump_op![Reg, Reg];
             }
             Bytecode::JumpLtRI
             | Bytecode::JumpLeRI
@@ -229,16 +203,7 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
             | Bytecode::JumpLeIR
             | Bytecode::JumpEqIR
             | Bytecode::JumpNeIR => jump_op![Int, Reg],
-            Bytecode::Call0 => call!(0),
-            Bytecode::Call1 => call!(1),
-            Bytecode::Call2 => call!(2),
-            Bytecode::Call3 => call!(3),
-            Bytecode::Call4 => call!(4),
-            Bytecode::Call5 => call!(5),
-            Bytecode::Call6 => call!(6),
-            Bytecode::Call7 => call!(7),
-            Bytecode::Call8 => call!(8),
-            Bytecode::CallV => {
+            Bytecode::Call => {
                 let addr = code.take::<Addr>().unwrap();
                 let offset = addr_to_usize(addr);
                 let num_args = code.take::<Int>().unwrap();
@@ -256,16 +221,7 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
                 });
             }
             Bytecode::DJump => skip![Reg],
-            Bytecode::DCall0 => skip![Reg, [Reg; 0], Reg],
-            Bytecode::DCall1 => skip![Reg, [Reg; 1], Reg],
-            Bytecode::DCall2 => skip![Reg, [Reg; 2], Reg],
-            Bytecode::DCall3 => skip![Reg, [Reg; 3], Reg],
-            Bytecode::DCall4 => skip![Reg, [Reg; 4], Reg],
-            Bytecode::DCall5 => skip![Reg, [Reg; 5], Reg],
-            Bytecode::DCall6 => skip![Reg, [Reg; 6], Reg],
-            Bytecode::DCall7 => skip![Reg, [Reg; 7], Reg],
-            Bytecode::DCall8 => skip![Reg, [Reg; 8], Reg],
-            Bytecode::DCallV => {
+            Bytecode::DCall => {
                 code.skip::<Reg>();
                 let num_args = code.take::<Int>().unwrap();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
@@ -284,7 +240,7 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
             | Bytecode::MulRR
             | Bytecode::DivRR
             | Bytecode::ModRR => {
-                skip![Reg, Reg, Reg]
+                skip![Reg, Reg, Reg];
             }
             Bytecode::AddIR
             | Bytecode::SubRI
@@ -356,27 +312,6 @@ fn register_is_used_impl(
         }};
     }
 
-    macro_rules! call {
-        (Addr $(, $num_args:literal)?) => {{
-            skip![Addr];
-            $(
-            for _ in 0..$num_args {
-                check_reg!(true);
-            }
-            )?
-            check_reg!(false);
-        }};
-        (Reg $(, $num_args:literal)?) => {{
-            check_reg!(true);
-            $(
-            for _ in 0..$num_args {
-                check_reg!(true);
-            }
-            )?
-            check_reg!(false);
-        }};
-    }
-
     let offset = code.offset();
     if head == buf.len() {
         return true;
@@ -390,6 +325,8 @@ fn register_is_used_impl(
         let opcode = code.take::<Bytecode>().unwrap();
         let start = code.offset();
         match opcode {
+            // Can't make any assumptions about missing code
+            Bytecode::Missing => return false,
             Bytecode::Exit => return false,
             Bytecode::Func | Bytecode::Jump => return_used_at_addr!(),
             Bytecode::Copy | Bytecode::Len | Bytecode::Type => check_reg!(true, false),
@@ -410,16 +347,7 @@ fn register_is_used_impl(
                 check_reg!(true);
                 return_used_at_addr!();
             }
-            Bytecode::Call0 => call!(Addr),
-            Bytecode::Call1 => call!(Addr, 1),
-            Bytecode::Call2 => call!(Addr, 2),
-            Bytecode::Call3 => call!(Addr, 3),
-            Bytecode::Call4 => call!(Addr, 4),
-            Bytecode::Call5 => call!(Addr, 5),
-            Bytecode::Call6 => call!(Addr, 6),
-            Bytecode::Call7 => call!(Addr, 7),
-            Bytecode::Call8 => call!(Addr, 8),
-            Bytecode::CallV => {
+            Bytecode::Call => {
                 skip![Addr];
                 let num_args = code.take::<Int>().unwrap();
                 for _ in 0..num_args {
@@ -429,16 +357,7 @@ fn register_is_used_impl(
             }
             Bytecode::Addr => {}
             Bytecode::DJump => check_reg!(true),
-            Bytecode::DCall0 => call!(Reg),
-            Bytecode::DCall1 => call!(Reg, 1),
-            Bytecode::DCall2 => call!(Reg, 2),
-            Bytecode::DCall3 => call!(Reg, 3),
-            Bytecode::DCall4 => call!(Reg, 4),
-            Bytecode::DCall5 => call!(Reg, 5),
-            Bytecode::DCall6 => call!(Reg, 6),
-            Bytecode::DCall7 => call!(Reg, 7),
-            Bytecode::DCall8 => call!(Reg, 8),
-            Bytecode::DCallV => {
+            Bytecode::DCall => {
                 check_reg!(true);
                 let num_args = code.take::<Int>().unwrap();
                 for _ in 0..num_args {

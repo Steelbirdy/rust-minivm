@@ -34,14 +34,17 @@ pub struct Interner {
 }
 
 impl Interner {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn intern(&mut self, s: &str) -> Key {
         Key(self.inner.get_or_intern(s))
     }
 
+    #[must_use]
     pub fn lookup(&self, key: Key) -> &str {
         self.inner.resolve(&key.0)
     }
@@ -50,9 +53,9 @@ impl Interner {
 impl Default for Interner {
     fn default() -> Self {
         let mut ret = Self {
-            inner: Default::default(),
+            inner: lasso::Rodeo::default(),
         };
-        ret.intern(crate::common::ENTRY_POINT_LBL);
+        let _ = ret.intern(crate::common::ENTRY_POINT_LBL);
         ret
     }
 }

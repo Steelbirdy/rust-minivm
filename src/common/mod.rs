@@ -1,6 +1,6 @@
 mod bytes;
-mod interner;
 pub mod config;
+mod interner;
 
 pub use bytes::{
     ByteBuffer, ByteEditor, ByteReader, ByteWriter, FromBytes, OwnedByteBuffer, Push, Read,

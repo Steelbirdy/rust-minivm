@@ -1,8 +1,13 @@
-use std::io::{BufWriter, StdoutLock, Write};
+#![allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+
 use crate::{
-    common::{config::{self, RunConfig}, Addr, ByteReader, Int, Read, Reg},
+    common::{
+        config::{self, RunConfig},
+        Addr, ByteReader, Int, Read, Reg,
+    },
     vm::{disassemble_instruction, Gc, Opcode, Stack, Value},
 };
+use std::io::{BufWriter, StdoutLock, Write};
 
 pub struct Vm<'a> {
     code: ByteReader<'a>,
@@ -58,10 +63,28 @@ impl<'a> Vm<'a> {
     fn write(&mut self, ch: u32) {
         let ch = char::from_u32(ch).unwrap();
         let slice = ch.encode_utf8(&mut self.char_buf);
-        let _ = self.stdout.write(slice.as_bytes());
+        drop(self.stdout.write(slice.as_bytes()));
         if ch == '\n' && !self.config.trace_execution {
-            let _ = self.stdout.flush();
+            drop(self.stdout.flush());
         }
+    }
+
+    fn push_frame(&mut self, num_regs: Reg, addr: usize) {
+        self.gc.push_frame(num_regs);
+        self.call_stack.push(self.code.offset());
+        self.code.set_offset(addr);
+    }
+
+    fn pop_frame(&mut self) {
+        let offset = if let Some(offset) = self.call_stack.pop() {
+            self.code.set_offset(offset);
+            offset - std::mem::size_of::<Reg>()
+        } else {
+            self.stop = true;
+            return;
+        };
+        let num_regs = unsafe { self.code.read_at_unchecked::<Reg>(offset) };
+        self.gc.pop_frame(num_regs);
     }
 }
 
@@ -127,6 +150,7 @@ fn jump_ez(vm: &mut Vm) {
     }
 }
 
+#[allow(clippy::if_not_else)]
 fn jump_nz(vm: &mut Vm) {
     if load!(vm) != 0 {
         vm.code.set_offset(take!(vm, Addr) as _);
@@ -187,9 +211,7 @@ macro_rules! call_ops {
             )*
 
             let num_regs = take!(vm, Reg);
-            vm.call_stack.push(vm.code.offset());
-            vm.gc.push_frame(num_regs);
-            vm.code.set_offset(addr as usize);
+            vm.push_frame(num_regs, addr as usize);
 
             $(
             vm.gc[$i as Reg] = $arg;
@@ -219,9 +241,7 @@ fn callv(vm: &mut Vm) {
         args.push(load!(vm));
     }
     let num_regs = take!(vm, Reg);
-    vm.call_stack.push(vm.code.offset());
-    vm.gc.push_frame(num_regs);
-    vm.code.set_offset(addr as usize);
+    vm.push_frame(num_regs, addr as usize);
 
     for i in 0..num_args {
         vm.gc[i as Reg + 1] = args[i as usize];
@@ -241,9 +261,7 @@ macro_rules! dcall_ops {
             let addr = load!(vm);
             $(let args = [(); $num_args].map(|_| load!(vm));)?
             let num_regs = take!(vm, Reg);
-            vm.call_stack.push(vm.code.offset());
-            vm.gc.push_frame(num_regs);
-            vm.code.set_offset(addr.as_int_unchecked() as usize);
+            vm.push_frame(num_regs, addr.as_int_unchecked() as usize);
 
             $(
             for i in 0..$num_args {
@@ -275,9 +293,7 @@ fn dcallv(vm: &mut Vm) {
         args.push(load!(vm));
     }
     let num_regs = take!(vm, Reg);
-    vm.call_stack.push(vm.code.offset());
-    vm.gc.push_frame(num_regs);
-    vm.code.set_offset(addr.as_int_unchecked() as usize);
+    vm.push_frame(num_regs, addr.as_int_unchecked() as usize);
 
     for i in 0..num_args {
         vm.gc[i as Reg + 1] = args[i as usize];
@@ -286,43 +302,13 @@ fn dcallv(vm: &mut Vm) {
 
 fn ret_r(vm: &mut Vm) {
     let ret = load!(vm);
-    let offset = match vm.call_stack.pop() {
-        Some(offset) => {
-            vm.code.set_offset(offset);
-            offset
-        }
-        None => {
-            vm.stop = true;
-            return;
-        }
-    };
-    unsafe {
-        vm.gc.pop_frame(
-            vm.code
-                .read_at_unchecked::<Reg>(offset - std::mem::size_of::<Reg>()),
-        );
-    }
+    vm.pop_frame();
     *load!(mut vm) = ret;
 }
 
 fn ret_i(vm: &mut Vm) {
     let ret = take!(vm, Value);
-    let offset = match vm.call_stack.pop() {
-        Some(offset) => {
-            vm.code.set_offset(offset);
-            offset
-        }
-        None => {
-            vm.stop = true;
-            return;
-        }
-    };
-    unsafe {
-        vm.gc.pop_frame(
-            vm.code
-                .read_at_unchecked::<Reg>(offset - std::mem::size_of::<Reg>()),
-        );
-    }
+    vm.pop_frame();
     *load!(mut vm) = ret;
 }
 
@@ -447,16 +433,12 @@ fn r#type(vm: &mut Vm) {
 
 fn putc_r(vm: &mut Vm) {
     let ch = load!(vm).as_int_unchecked();
-    let ch = char::from_u32(ch.try_into().unwrap()).unwrap();
-    let slice = ch.encode_utf8(&mut vm.char_buf);
-    let _ = vm.stdout.write(slice.as_bytes());
+    vm.write(ch.try_into().unwrap());
 }
 
 fn putc_i(vm: &mut Vm) {
     let ch = take!(vm, u32);
-    let ch = char::from_u32(ch).unwrap();
-    let slice = ch.encode_utf8(&mut vm.char_buf);
-    let _ = vm.stdout.write(slice.as_bytes());
+    vm.write(ch);
 }
 
 fn __max(_vm: &mut Vm) {

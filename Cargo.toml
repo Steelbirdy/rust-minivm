@@ -11,15 +11,13 @@ debug = 1
 [dependencies]
 clap = { version = "3.2", features = ["derive"] }
 codespan-reporting = "0.11"
-lalrpop-util = "0.19"
+eventree_wrapper = { git = "https://github.com/Steelbirdy/eventree_wrapper", features = ["logos"] }
 lasso = "0.6"
+lazy_static = "1.4"
 logos = "0.12"
 rustc-hash = "1.1"
 smallvec = "1.9"
 text-size = "1.1"
-
-[build-dependencies]
-lalrpop = "0.19"
 
 [dev-dependencies]
 expect-test = "1.4"

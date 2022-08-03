@@ -1,8 +1,5 @@
 use crate::{
-    common::{
-        config::NUM_REGISTERS,
-        Reg
-    },
+    common::{config::NUM_REGISTERS, Reg},
     vm::{
         value::{Value, ValueKind},
         Len, Ptr,
@@ -104,6 +101,7 @@ pub struct Gc {
 }
 
 impl Gc {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -116,6 +114,7 @@ impl Gc {
         self.frame_start -= num_regs as usize;
     }
 
+    #[must_use]
     pub fn alloc(&mut self, len: Len) -> Ptr {
         let len_usize = usize::try_from(len).unwrap();
 
@@ -132,14 +131,17 @@ impl Gc {
         ret + 1
     }
 
+    #[must_use]
     pub fn array_len(&self, ptr: Ptr) -> Len {
         self.buf[ptr - 1].header().size
     }
 
+    #[must_use]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
         self.buf[ptr - 1].header().len()
     }
 
+    #[must_use]
     pub fn array(&self, ptr: Ptr) -> &[Value] {
         let len = self.array_len(ptr) as usize;
         assert!(ptr + len <= self.buf.len());
@@ -152,19 +154,21 @@ impl Gc {
         // qed
         unsafe {
             let ptr = self.buf.as_ptr().add(ptr);
-            std::slice::from_raw_parts(ptr as *const Value, len)
+            std::slice::from_raw_parts(ptr.cast::<Value>(), len)
         }
     }
 
+    #[must_use]
     pub fn array_mut(&mut self, ptr: Ptr) -> &mut [Value] {
         let len = self.array_len_usize(ptr);
         // SAFETY: See `Gc::array`.
         unsafe {
             let ptr = self.buf.as_mut_ptr().add(ptr);
-            std::slice::from_raw_parts_mut(ptr as *mut Value, len)
+            std::slice::from_raw_parts_mut(ptr.cast::<Value>(), len)
         }
     }
 
+    #[must_use]
     fn should_run(&self) -> bool {
         self.cur_alloc >= self.max_alloc
     }

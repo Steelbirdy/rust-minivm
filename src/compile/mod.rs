@@ -8,11 +8,11 @@ pub use debug::disassemble;
 
 use crate::{
     common::{Interner, OwnedByteBuffer},
-    parse::ast::Program,
+    parse::SyntaxTree,
 };
 
-pub fn assemble(program: &Program, interner: &Interner) -> OwnedByteBuffer {
-    OwnedByteBuffer::new(Assembler::new(program, interner).finish())
+pub fn assemble(tree: &SyntaxTree, interner: &mut Interner) -> OwnedByteBuffer {
+    OwnedByteBuffer::new(Assembler::new(tree, interner).finish())
 }
 
 #[cfg(test)]
@@ -22,9 +22,9 @@ mod tests {
     use expect_test::{expect, Expect};
 
     fn check(source: &str, expect: Expect) {
-        let mut interner = crate::common::Interner::new();
-        let program = crate::parse::parse(source, &mut interner).unwrap();
-        let bytecode = Assembler::new(&program, &interner).finish();
+        let mut interner = Interner::new();
+        let result = crate::parse::parse(source);
+        let bytecode = Assembler::new(&result.syntax_tree(), &mut interner).finish();
         let reader = ByteReader::new(&bytecode);
         let actual = disassemble(reader);
         expect.assert_eq(&actual);
@@ -111,12 +111,12 @@ end",
             expect![
                 "\
 0000 | jump      [@12]
-0005 | func      [@20, r1]
-0012 | call0     [@27, r0]
-0019 | exit      []
-0020 | func      [@41, r3]
-0027 | int       [0, r2]
-0038 | ret_r     [r2]"
+0005 | func      [@28, r1]
+0012 | call      [@35, 0, r0]
+0027 | exit      []
+0028 | func      [@49, r3]
+0035 | int       [0, r2]
+0046 | ret_r     [r2]"
             ],
         )
     }

@@ -69,28 +69,33 @@ impl Value {
     pub const PTR_MAX: Value = Value::ptr_unchecked(Ptr::MAX >> 1);
     pub const PTR_MIN: Value = Value::ptr_unchecked(Ptr::MIN >> 1);
 
+    #[must_use]
     pub fn int(value: Int) -> Self {
         assert!(Self::INT_MIN.as_int_unchecked() <= value);
         assert!(value <= Self::INT_MAX.as_int_unchecked());
         Self::int_unchecked(value)
     }
 
+    #[must_use]
     pub fn ptr(ptr: Ptr) -> Self {
         assert!(Self::PTR_MIN.as_ptr_unchecked() <= ptr);
         assert!(ptr <= Self::PTR_MAX.as_ptr_unchecked());
         Self::ptr_unchecked(ptr)
     }
 
+    #[must_use]
     pub const fn int_unchecked(value: Int) -> Self {
         let bytes = (value << 1).to_le_bytes();
         Self(Repr::from_le_bytes(bytes))
     }
 
+    #[must_use]
     pub const fn ptr_unchecked(ptr: Ptr) -> Self {
         let bytes = ((ptr << 1) | 1).to_le_bytes();
         Self(Repr::from_le_bytes(bytes))
     }
 
+    #[must_use]
     pub const fn kind(self) -> ValueKind {
         // SAFETY: The only possible values of (<int> & 1) are 0 and 1.
         // Both 0u8 and 1u8 are valid ValueKinds (since ValueKind is repr(u8))
@@ -99,22 +104,27 @@ impl Value {
         unsafe { std::mem::transmute((self.0 & 1) as u8) }
     }
 
+    #[must_use]
     pub const fn is_int(self) -> bool {
         self.kind() as u8 == ValueKind::Int as u8
     }
 
+    #[must_use]
     pub const fn is_ptr(self) -> bool {
         self.kind() as u8 == ValueKind::Ptr as u8
     }
 
+    #[must_use]
     pub fn as_int(self) -> Int {
         self.try_as_int().unwrap()
     }
 
+    #[must_use]
     pub fn as_ptr(self) -> Ptr {
         self.try_as_ptr().unwrap()
     }
 
+    #[must_use]
     pub fn try_as_int(self) -> Option<Int> {
         if self.is_int() {
             Some(self.as_int_unchecked())
@@ -123,6 +133,7 @@ impl Value {
         }
     }
 
+    #[must_use]
     pub fn try_as_ptr(self) -> Option<Ptr> {
         if self.is_ptr() {
             Some(self.as_ptr_unchecked())
@@ -131,16 +142,19 @@ impl Value {
         }
     }
 
+    #[must_use]
     pub const fn as_int_unchecked(self) -> Int {
         let val = Int::from_le_bytes(self.0.to_le_bytes());
         val >> 1
     }
 
+    #[must_use]
     pub const fn as_ptr_unchecked(self) -> Ptr {
         let val = Ptr::from_le_bytes(self.0.to_le_bytes());
         val >> 1
     }
 
+    #[must_use]
     pub fn into_raw(self) -> Repr {
         self.0
     }

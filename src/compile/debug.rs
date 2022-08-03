@@ -11,6 +11,7 @@ enum Arg {
     Char(common::Int),
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 impl fmt::Debug for Arg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -43,6 +44,7 @@ pub fn disassemble(code: ByteReader) -> String {
         write!(buf, "{offset:>04} | {as_str}{padding}").unwrap();
 
         match opcode {
+            Missing => args!(),
             Exit => args!(),
             Func => args!(Addr, Reg),
             Copy => args!(Reg, Reg),
@@ -51,16 +53,7 @@ pub fn disassemble(code: ByteReader) -> String {
             JumpLtRR | JumpLeRR | JumpEqRR | JumpNeRR => args!(Reg, Reg, Addr),
             JumpLtRI | JumpLeRI => args!(Reg, Int, Addr),
             JumpLtIR | JumpLeIR | JumpEqIR | JumpNeIR => args!(Int, Reg, Addr),
-            Call0 => args!(Addr, Reg),
-            Call1 => args!(Addr, Reg, Reg),
-            Call2 => args!(Addr, Reg, Reg, Reg),
-            Call3 => args!(Addr, Reg, Reg, Reg, Reg),
-            Call4 => args!(Addr, Reg, Reg, Reg, Reg, Reg),
-            Call5 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg),
-            Call6 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            Call7 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            Call8 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            CallV => {
+            Call => {
                 let addr = Arg::Addr(code.take().unwrap());
                 let num_args = code.take::<common::Int>().unwrap();
                 write!(buf, " [{addr:?}, {num_args}").unwrap();
@@ -71,16 +64,7 @@ pub fn disassemble(code: ByteReader) -> String {
             }
             Addr => args!(Addr, Reg),
             DJump => args!(Reg),
-            DCall0 => args!(Reg, Reg),
-            DCall1 => args!(Reg, Reg, Reg),
-            DCall2 => args!(Reg, Reg, Reg, Reg),
-            DCall3 => args!(Reg, Reg, Reg, Reg, Reg),
-            DCall4 => args!(Reg, Reg, Reg, Reg, Reg, Reg),
-            DCall5 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            DCall6 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            DCall7 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            DCall8 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-            DCallV => {
+            DCall => {
                 let addr = Arg::Reg(code.take().unwrap());
                 let num_args = code.take::<common::Int>().unwrap();
                 write!(buf, " [{addr:?}, {num_args}").unwrap();

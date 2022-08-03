@@ -1,58 +1,13 @@
+use eventree_wrapper::{eventree::SyntaxKind, parser::SimpleTokens};
 use logos::Logos;
-use text_size::{TextRange, TextSize};
-use std::fmt;
-use codespan_reporting::{
-    diagnostic::{Diagnostic, Label},
-};
-use crate::{
-    config::Process,
-};
 
-pub type Spanned = Result<(TextSize, TokenKind, TextSize), LexerError>;
-
-pub fn lex(source: &str) -> impl Iterator<Item = Spanned> + '_ {
-    assert!(source.len() < u32::MAX as usize, "source file is too long");
-
-    <TokenKind as logos::Logos>::lexer(source)
-        .spanned()
-        .map(|(kind, span)| {
-            let (start, end) = (TextSize::from(span.start as u32), TextSize::from(span.end as u32));
-            if kind == TokenKind::Error {
-                Err(LexerError {
-                    kind: LexerErrorKind::Unrecognized,
-                    range: TextRange::new(start, end),
-                })
-            } else {
-                Ok((start, kind, end))
-            }
-        })
+#[must_use]
+pub fn lex(source: &str) -> SimpleTokens<TokenKind> {
+    SimpleTokens::tokenize(source)
 }
-
-#[derive(Debug)]
-pub struct LexerError {
-    kind: LexerErrorKind,
-    range: TextRange,
-}
-
-#[derive(Debug)]
-pub enum LexerErrorKind {
-    Unrecognized,
-}
-
-impl fmt::Display for LexerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
-            LexerErrorKind::Unrecognized => {
-                let [start, end] = [self.range.start(), self.range.end()].map(u32::from);
-                write!(f, "unrecognized token at {start}..{end}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for LexerError {}
 
 #[derive(Logos, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[repr(u8)]
 pub enum TokenKind {
     #[token("add")]
     Add,
@@ -127,44 +82,105 @@ pub enum TokenKind {
     IntLiteral,
     #[regex(r":[^\r\n]*")]
     StringLiteral,
+    #[regex(r"'([^\\']|\\.)'")]
+    CharLiteral,
     #[regex(r"[a-zA-Z_\.<>][a-zA-Z0-9_\.-<>:]*")]
     Label,
     #[regex(r"r\d+")]
     Register,
 
-    #[regex(r"[ \t]+", logos::skip)]
+    #[regex(r"[ \t]+")]
     Whitespace,
-    #[regex(r"#[^\r\n]*", logos::skip)]
+    #[regex(r"#[^\r\n]*")]
     Comment,
-    #[regex(r"\r\n|\r|\n")]
-    Newline,
+    #[regex(r"(\r\n|\r|\n)+")]
+    LineBreak,
 
     #[error]
     Error,
 }
 
+impl TokenKind {
+    pub fn as_str(self) -> &'static str {
+        use TokenKind::*;
+        match self {
+            Add => "`add`",
+            Addr => "`addr`",
+            Arr => "`arr`",
+            Call => "`call`",
+            Copy => "`copy`",
+            Decr => "`decr`",
+            Div => "`div`",
+            End => "`end`",
+            Exit => "`exit`",
+            Func => "`func`",
+            Get => "`get`",
+            Incr => "`incr`",
+            Int => "`int`",
+            Jump => "`jump`",
+            JumpEq => "`jumpeq`",
+            JumpEz => "`jumpez`",
+            JumpGe => "`jumpge`",
+            JumpGt => "`jumpgt`",
+            JumpLe => "`jumple`",
+            JumpLt => "`jumplt`",
+            JumpNe => "`jumpne`",
+            JumpNz => "`jumpnz`",
+            Len => "`len`",
+            Mod => "`mod`",
+            Mul => "`mul`",
+            Neg => "`neg`",
+            Putc => "`putc`",
+            Ret => "`ret`",
+            Set => "`set`",
+            Str => "`str`",
+            Sub => "`sub`",
+            Type => "`type`",
+            Arrow => "`<-`",
+            At => "`@`",
+            IntLiteral => "integer",
+            StringLiteral => "string",
+            CharLiteral => "char",
+            Label => "label",
+            Register => "register",
+            Whitespace => "whitespace",
+            Comment => "comment",
+            LineBreak => "line break",
+            Error => "<unknown>",
+        }
+    }
+}
+
+unsafe impl SyntaxKind for TokenKind {
+    fn to_raw(self) -> u16 {
+        self as u16
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    unsafe fn from_raw(raw: u16) -> Self {
+        std::mem::transmute(raw as u8)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use expect_test::{Expect, expect};
+    use expect_test::{expect, Expect};
     use std::fmt::Write;
 
-    fn tokenize(source: &str) -> Result<String, Box<dyn std::error::Error>> {
-        lex(source).try_fold(String::new(), |mut buf, next| {
-                let (start, kind, end) = next?;
-                writeln!(buf, "{:?}@{}..{}", kind, u32::from(start), u32::from(end))?;
-                Ok(buf)
+    fn tokenize(source: &str) -> String {
+        lex(source)
+            .iter()
+            .fold(String::new(), |mut buf, (range, kind)| {
+                let (start, end) = (range.start(), range.end());
+                let _ = writeln!(buf, "{:?}@{}..{}", kind, u32::from(start), u32::from(end));
+                buf
             })
     }
 
     fn check(source: &str, expect: Expect) {
-        let actual = tokenize(source).unwrap();
+        let actual = tokenize(source);
         expect.assert_eq(actual.trim_end());
-    }
-
-    fn check_error(source: &str, expect: Expect) {
-        let actual = tokenize(source).unwrap_err();
-        expect.assert_eq(&actual.to_string())
     }
 
     #[test]
@@ -339,9 +355,15 @@ mod tests {
 
     #[test]
     fn lex_intliteral() {
-        check("420 -69", expect!["\
+        check(
+            "420 -69",
+            expect![
+                "\
 IntLiteral@0..3
-IntLiteral@4..7"]);
+Whitespace@3..4
+IntLiteral@4..7"
+            ],
+        );
     }
 
     #[test]
@@ -356,47 +378,83 @@ IntLiteral@4..7"]);
 
     #[test]
     fn lex_label_non_alphabetic() {
-        check(".<> ....", expect!["\
+        check(
+            ".<> ....",
+            expect![
+                "\
 Label@0..3
-Label@4..8"]);
+Whitespace@3..4
+Label@4..8"
+            ],
+        );
     }
 
     #[test]
     fn lex_label_starting_with_r() {
-        check("r1x r12345t r.0", expect!["\
+        check(
+            "r1x r12345t r.0",
+            expect![
+                "\
 Label@0..3
+Whitespace@3..4
 Label@4..11
-Label@12..15"])
+Whitespace@11..12
+Label@12..15"
+            ],
+        )
     }
 
     #[test]
     fn lex_register() {
-        check("r0 r10", expect!["\
+        check(
+            "r0 r10",
+            expect![
+                "\
 Register@0..2
-Register@3..6"]);
+Whitespace@2..3
+Register@3..6"
+            ],
+        );
     }
 
     #[test]
     fn lex_whitespace() {
-        check("   \tadd", expect!["Add@4..7"]);
+        check(
+            "   \tadd",
+            expect![
+                "\
+Whitespace@0..4
+Add@4..7"
+            ],
+        );
     }
 
     #[test]
     fn lex_comment() {
-        check("# this is a comment\nadd", expect!["\
-Newline@19..20
-Add@20..23"]);
+        check(
+            "# this is a comment\nadd",
+            expect![
+                "\
+Comment@0..19
+LineBreak@19..20
+Add@20..23"
+            ],
+        );
     }
 
     #[test]
-    fn lex_newline() {
-        check("\n\r\r\n", expect!["Newline@0..1
-Newline@1..2
-Newline@2..4"]);
+    fn lex_line_break() {
+        check(
+            "\n\r\r\n",
+            expect![
+                "\
+LineBreak@0..4"
+            ],
+        );
     }
 
     #[test]
     fn lex_error() {
-        check_error("$", expect!["unrecognized token at 0..1"]);
+        check("$", expect!["Error@0..1"]);
     }
 }

@@ -26,7 +26,7 @@ where
             let offset = offset + i * size_of::<T>();
             init.write(reader.read_at(offset)?);
         }
-        Some(unsafe { (ret.as_ptr() as *const T as *const [T; N]).read() })
+        Some(unsafe { ret.as_ptr().cast::<T>().cast::<[T; N]>().read() })
     }
 
     unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
@@ -37,7 +37,7 @@ where
             let offset = offset + i * size_of::<T>();
             init.write(reader.read_at_unchecked(offset));
         }
-        (ret.as_ptr() as *const T as *const [T; N]).read()
+        ret.as_ptr().cast::<T>().cast::<[T; N]>().read()
     }
 }
 
@@ -125,7 +125,7 @@ pub trait Read: Sized {
     }
 
     /// # Safety
-    /// See [Read::read_unchecked]
+    /// See [`Read::read_unchecked`]
     unsafe fn read_at_unchecked<T: FromBytes>(&self, offset: usize) -> T {
         let prev_offset = self.offset();
         self.set_offset(offset);
@@ -135,7 +135,7 @@ pub trait Read: Sized {
     }
 
     /// # Safety
-    /// See [Read::read_unchecked]
+    /// See [`Read::read_unchecked`]
     unsafe fn take_unchecked<T: FromBytes>(&self) -> T {
         let ret = self.read_unchecked();
         self.skip::<T>();
@@ -171,7 +171,7 @@ impl<T: Read> Read for &T {
     }
 
     fn set_offset(&self, new_offset: usize) {
-        T::set_offset(self, new_offset)
+        T::set_offset(self, new_offset);
     }
 
     fn len(&self) -> usize {
@@ -219,7 +219,7 @@ impl<T: Write> Write for &mut T {
 
 impl<P: Push> Push for &mut P {
     fn push<T: ToBytes>(&mut self, value: T) {
-        P::push(self, value)
+        P::push(self, value);
     }
 }
 

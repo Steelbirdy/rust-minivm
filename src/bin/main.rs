@@ -10,10 +10,7 @@ struct Cli {
 }
 
 fn run(source: &str, config: RunConfig) {
-    let process = config::Process {
-        source,
-        config,
-    };
+    let process = config::Process { source, config };
     rust_minivm::run(&process);
 }
 

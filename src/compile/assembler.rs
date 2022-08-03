@@ -1,8 +1,9 @@
 use crate::{
     common::{Addr, ByteWriter, Int, Interner, Key, Push, Reg},
     compile::bytecode::Bytecode,
-    parse::ast::{Function, Instruction, Program, Target, Val},
+    parse::{ast, SyntaxTree},
 };
+use eventree_wrapper::syntax_tree::{AstNode, AstToken};
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -21,17 +22,17 @@ enum Asm {
 }
 
 pub struct Assembler<'a> {
-    program: &'a Program,
-    interner: &'a Interner,
+    tree: &'a SyntaxTree,
+    interner: &'a mut Interner,
     num_funcs: u32,
     num_regs: Reg,
     asm: Vec<Asm>,
 }
 
 impl<'a> Assembler<'a> {
-    pub fn new(program: &'a Program, interner: &'a Interner) -> Self {
+    pub fn new(program: &'a SyntaxTree, interner: &'a mut Interner) -> Self {
         Self {
-            program,
+            tree: program,
             interner,
             num_funcs: 0,
             num_regs: 0,
@@ -40,11 +41,13 @@ impl<'a> Assembler<'a> {
     }
 
     pub fn finish(mut self) -> Box<[u8]> {
-        self.push_op(Bytecode::Jump);
+        let root = ast::Root::cast(self.tree.root(), self.tree).unwrap();
+
+        self.push(Bytecode::Jump);
         self.push(Asm::LblRef(Key::entry_point()));
-        for func in &self.program.functions {
+        for func in root.functions(self.tree) {
             self.num_regs = 0;
-            self.write_function(func);
+            self.push(func);
             self.num_funcs += 1;
         }
         self.patch_delayed();
@@ -67,492 +70,9 @@ impl<'a> Assembler<'a> {
         }
     }
 
-    fn write_function(&mut self, func: &Function) {
-        self.push_op(Bytecode::Func);
-        self.push(Asm::FuncEndRef(self.num_funcs));
-        let asm_num_regs = self.push_delayed_reg();
-        self.push(Asm::LblLoc(func.name));
-
-        for instr in &func.instructions {
-            match instr {
-                Instruction::Exit => {
-                    self.push_op(Bytecode::Exit);
-                }
-                Instruction::Lbl { name } => {
-                    self.push(Asm::LblLoc(*name));
-                }
-                Instruction::Copy { to, from } => {
-                    self.push_op(Bytecode::Copy);
-                    self.push_reg(*from);
-                    self.push_reg(*to);
-                }
-                Instruction::Jump { target } => {
-                    self.push_op(match target {
-                        Target::Reg(_) => Bytecode::DJump,
-                        Target::Lbl(_) => Bytecode::Jump,
-                    });
-                    self.push_target(*target);
-                }
-                Instruction::JumpEz { val, target } => match val {
-                    Val::Reg(reg) => {
-                        self.push_op(Bytecode::JumpEz);
-                        self.push_reg(*reg);
-                        self.push(Asm::LblRef(*target));
-                    }
-                    Val::Int(0) => {
-                        self.push_op(Bytecode::Jump);
-                        self.push(Asm::LblRef(*target));
-                    }
-                    Val::Int(_) => {}
-                },
-                Instruction::JumpNz { val, target } => match val {
-                    Val::Reg(reg) => {
-                        self.push_op(Bytecode::JumpNz);
-                        self.push_reg(*reg);
-                        self.push(Asm::LblRef(*target));
-                    }
-                    Val::Int(0) => {}
-                    Val::Int(_) => {
-                        self.push_op(Bytecode::Jump);
-                        self.push(Asm::LblRef(*target));
-                    }
-                },
-                Instruction::JumpLt { lhs, rhs, target } => {
-                    self.push_op(match (lhs, rhs) {
-                        (Val::Reg(_), Val::Reg(_)) => Bytecode::JumpLtRR,
-                        (Val::Reg(_), Val::Int(_)) => Bytecode::JumpLtRI,
-                        (Val::Int(_), Val::Reg(_)) => Bytecode::JumpLtIR,
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            if lhs < rhs {
-                                self.push_op(Bytecode::Jump);
-                                self.push(Asm::LblRef(*target));
-                            }
-                            continue;
-                        }
-                    });
-                    self.push_val(*lhs);
-                    self.push_val(*rhs);
-                    self.push(Asm::LblRef(*target));
-                }
-                Instruction::JumpLe { lhs, rhs, target } => {
-                    self.push_op(match (lhs, rhs) {
-                        (Val::Reg(_), Val::Reg(_)) => Bytecode::JumpLeRR,
-                        (Val::Reg(_), Val::Int(_)) => Bytecode::JumpLeRI,
-                        (Val::Int(_), Val::Reg(_)) => Bytecode::JumpLeIR,
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            if lhs <= rhs {
-                                self.push_op(Bytecode::Jump);
-                                self.push(Asm::LblRef(*target));
-                            }
-                            continue;
-                        }
-                    });
-                    self.push_val(*lhs);
-                    self.push_val(*rhs);
-                    self.push(Asm::LblRef(*target));
-                }
-                Instruction::JumpGt { lhs, rhs, target } => {
-                    self.push_op(match (lhs, rhs) {
-                        (Val::Reg(_), Val::Reg(_)) => Bytecode::JumpLtRR,
-                        (Val::Reg(_), Val::Int(_)) => Bytecode::JumpLtIR,
-                        (Val::Int(_), Val::Reg(_)) => Bytecode::JumpLtRI,
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            if lhs > rhs {
-                                self.push_op(Bytecode::Jump);
-                                self.push(Asm::LblRef(*target));
-                            }
-                            continue;
-                        }
-                    });
-                    self.push_val(*rhs);
-                    self.push_val(*lhs);
-                    self.push(Asm::LblRef(*target));
-                }
-                Instruction::JumpGe { lhs, rhs, target } => {
-                    self.push_op(match (lhs, rhs) {
-                        (Val::Reg(_), Val::Reg(_)) => Bytecode::JumpLeRR,
-                        (Val::Reg(_), Val::Int(_)) => Bytecode::JumpLeIR,
-                        (Val::Int(_), Val::Reg(_)) => Bytecode::JumpLeRI,
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            if lhs >= rhs {
-                                self.push_op(Bytecode::Jump);
-                                self.push(Asm::LblRef(*target));
-                            }
-                            continue;
-                        }
-                    });
-                    self.push_val(*rhs);
-                    self.push_val(*lhs);
-                    self.push(Asm::LblRef(*target));
-                }
-                Instruction::JumpEq { lhs, rhs, target } => {
-                    let (op, lhs, rhs) = match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => (Bytecode::JumpEqRR, lhs, rhs),
-                        (rhs @ Val::Reg(_), lhs @ Val::Int(_))
-                        | (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => (Bytecode::JumpEqIR, lhs, rhs),
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            if lhs == rhs {
-                                self.push_op(Bytecode::Jump);
-                                self.push(Asm::LblRef(*target));
-                            }
-                            continue;
-                        }
-                    };
-                    self.push_op(op);
-                    self.push_val(*lhs);
-                    self.push_val(*rhs);
-                    self.push(Asm::LblRef(*target));
-                }
-                Instruction::JumpNe { lhs, rhs, target } => {
-                    let (op, lhs, rhs) = match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => (Bytecode::JumpNeRR, lhs, rhs),
-                        (rhs @ Val::Reg(_), lhs @ Val::Int(_))
-                        | (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => (Bytecode::JumpNeIR, lhs, rhs),
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            if lhs != rhs {
-                                self.push_op(Bytecode::Jump);
-                                self.push(Asm::LblRef(*target));
-                            }
-                            continue;
-                        }
-                    };
-                    self.push_op(op);
-                    self.push_val(*lhs);
-                    self.push_val(*rhs);
-                    self.push(Asm::LblRef(*target));
-                }
-                Instruction::Call { to, target, args } => {
-                    let (op_func, opv) = match target {
-                        Target::Reg(_) => {
-                            (Bytecode::dcall as fn(usize) -> Bytecode, Bytecode::DCallV)
-                        }
-                        Target::Lbl(_) => (Bytecode::call as _, Bytecode::CallV),
-                    };
-                    if args.len() > Bytecode::MAX_INLINE_ARGS {
-                        self.push_op(opv);
-                        self.push_target(*target);
-                        self.push_int(args.len().try_into().unwrap());
-                    } else {
-                        let op = op_func(args.len());
-                        self.push_op(op);
-                        self.push_target(*target);
-                    }
-                    for arg in args {
-                        self.push_reg(*arg);
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Addr { to, of } => {
-                    self.push_op(Bytecode::Addr);
-                    self.push(Asm::LblRef(*of));
-                    self.push_reg(*to);
-                }
-                Instruction::Ret { val } => {
-                    self.push_op(match val {
-                        Val::Reg(_) => Bytecode::RetR,
-                        Val::Int(_) => Bytecode::RetI,
-                    });
-                    self.push_val(*val);
-                }
-                Instruction::Int { to, int } => {
-                    self.push_op(Bytecode::Int);
-                    self.push_int(*int);
-                    self.push_reg(*to);
-                }
-                Instruction::Str { to, str } => {
-                    self.push_op(Bytecode::Str);
-                    let str = self.interner.lookup(*str);
-
-                    let str_len = self.push_delayed_int();
-                    let mut len = 0;
-                    for ch in unescape_string(str) {
-                        self.push_int(u32::from(ch).into());
-                        len += 1;
-                    }
-                    str_len.finalize(len);
-                    self.push_reg(*to);
-                }
-                Instruction::Add { to, lhs, rhs } => {
-                    match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::AddRR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Reg(reg), Val::Int(0)) | (Val::Int(0), Val::Reg(reg)) => {
-                            if reg == to {
-                                continue;
-                            }
-                            self.push_op(Bytecode::Copy);
-                            self.push_reg(*reg);
-                        }
-                        (Val::Reg(reg), Val::Int(1)) | (Val::Int(1), Val::Reg(reg))
-                            if reg == to =>
-                        {
-                            self.push_op(Bytecode::Incr);
-                        }
-                        (Val::Reg(reg), Val::Int(-1)) | (Val::Int(-1), Val::Reg(reg))
-                            if reg == to =>
-                        {
-                            self.push_op(Bytecode::Decr);
-                        }
-                        (rhs @ Val::Reg(_), lhs @ Val::Int(_))
-                        | (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::AddIR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            let out = lhs.checked_add(*rhs).expect("int is out of range");
-                            self.push_op(Bytecode::Int);
-                            self.push_int(out);
-                        }
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Sub { to, lhs, rhs } => {
-                    match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::SubRR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Reg(reg), Val::Int(0)) => {
-                            if reg == to {
-                                continue;
-                            }
-                            self.push_op(Bytecode::Copy);
-                            self.push_reg(*reg);
-                        }
-                        (Val::Int(0), Val::Reg(reg)) => {
-                            self.push_op(Bytecode::Neg);
-                            self.push_reg(*reg);
-                        }
-                        (Val::Reg(reg), Val::Int(1)) if reg == to => {
-                            self.push_op(Bytecode::Decr);
-                        }
-                        (Val::Reg(reg), Val::Int(-1)) if reg == to => {
-                            self.push_op(Bytecode::Incr);
-                        }
-                        (lhs @ Val::Reg(_), rhs @ Val::Int(_)) => {
-                            self.push_op(Bytecode::SubRI);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::SubIR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            let out = lhs.checked_sub(*rhs).expect("int is out of range");
-                            self.push_op(Bytecode::Int);
-                            self.push_int(out);
-                        }
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Mul { to, lhs, rhs } => {
-                    match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::MulRR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Reg(_), Val::Int(0)) | (Val::Int(0), Val::Reg(_)) => {
-                            self.push_op(Bytecode::Int);
-                            self.push_int(0);
-                        }
-                        (Val::Reg(reg), Val::Int(1)) | (Val::Int(1), Val::Reg(reg)) => {
-                            if reg == to {
-                                continue;
-                            }
-                            self.push_op(Bytecode::Copy);
-                            self.push_reg(*reg);
-                        }
-                        (Val::Reg(reg), Val::Int(-1)) | (Val::Int(-1), Val::Reg(reg)) => {
-                            self.push_op(Bytecode::Neg);
-                            self.push_reg(*reg);
-                        }
-                        (rhs @ Val::Reg(_), lhs @ Val::Int(_))
-                        | (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::MulIR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            let out = lhs.checked_mul(*rhs).expect("int is out of range");
-                            self.push_op(Bytecode::Int);
-                            self.push_int(out);
-                        }
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Div { to, lhs, rhs } => {
-                    match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::DivRR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Reg(_), Val::Int(0)) => {
-                            // TODO: handle 0 / 0
-                            panic!("division by 0")
-                        }
-                        (Val::Int(0), Val::Reg(_)) => {
-                            // TODO: handle 0 / 0
-                            self.push_op(Bytecode::Int);
-                            self.push_int(0);
-                        }
-                        (Val::Reg(reg), Val::Int(1)) => {
-                            if reg == to {
-                                continue;
-                            }
-                            self.push_op(Bytecode::Copy);
-                            self.push_reg(*reg);
-                        }
-                        (Val::Reg(reg), Val::Int(-1)) => {
-                            self.push_op(Bytecode::Neg);
-                            self.push_reg(*reg);
-                        }
-                        (lhs @ Val::Reg(_), rhs @ Val::Int(_)) => {
-                            self.push_op(Bytecode::DivRI);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::DivIR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            let out = lhs.checked_div(*rhs).unwrap_or_else(|| {
-                                if *rhs == 0 {
-                                    panic!("division by 0");
-                                } else {
-                                    panic!("int is out of range");
-                                }
-                            });
-                            self.push_op(Bytecode::Int);
-                            self.push_int(out);
-                        }
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Mod { to, lhs, rhs } => {
-                    match (lhs, rhs) {
-                        (lhs @ Val::Reg(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::ModRR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Reg(_), Val::Int(0)) => {
-                            panic!("cannot compute x % 0")
-                        }
-                        (Val::Int(0), Val::Reg(_)) => {
-                            // TODO: Handle 0 % 0
-                            self.push_op(Bytecode::Int);
-                            self.push_int(0);
-                        }
-                        (Val::Reg(_), Val::Int(1 | -1)) => {
-                            self.push_op(Bytecode::Int);
-                            self.push_int(0);
-                        }
-                        (lhs @ Val::Reg(_), rhs @ Val::Int(_)) => {
-                            self.push_op(Bytecode::ModRI);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (lhs @ Val::Int(_), rhs @ Val::Reg(_)) => {
-                            self.push_op(Bytecode::ModIR);
-                            self.push_val(*lhs);
-                            self.push_val(*rhs);
-                        }
-                        (Val::Int(lhs), Val::Int(rhs)) => {
-                            let out = lhs.checked_rem(*rhs).unwrap_or_else(|| {
-                                if *rhs == 0 {
-                                    panic!("cannot compute x % 0");
-                                } else {
-                                    panic!("int is out of range");
-                                }
-                            });
-                            self.push_op(Bytecode::Int);
-                            self.push_int(out);
-                        }
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Neg { to, rhs } => {
-                    match rhs {
-                        Val::Reg(reg) => {
-                            self.push_op(Bytecode::Neg);
-                            self.push_reg(*reg);
-                        }
-                        Val::Int(int) => {
-                            self.push_op(Bytecode::Int);
-                            self.push_int(-*int);
-                        }
-                    }
-                    self.push_reg(*to);
-                }
-                Instruction::Incr { reg } => {
-                    self.push_op(Bytecode::Incr);
-                    self.push_reg(*reg);
-                }
-                Instruction::Decr { reg } => {
-                    self.push_op(Bytecode::Decr);
-                    self.push_reg(*reg);
-                }
-                Instruction::Arr { to, len } => {
-                    self.push_op(match len {
-                        Val::Reg(_) => Bytecode::ArrR,
-                        Val::Int(_) => Bytecode::ArrI,
-                    });
-                    self.push_val(*len);
-                    self.push_reg(*to);
-                }
-                Instruction::Get { to, arr, idx } => {
-                    self.push_op(match idx {
-                        Val::Reg(_) => Bytecode::GetR,
-                        Val::Int(_) => Bytecode::GetI,
-                    });
-                    self.push_reg(*arr);
-                    self.push_val(*idx);
-                    self.push_reg(*to);
-                }
-                Instruction::Set { arr, idx, val } => {
-                    self.push_op(match (idx, val) {
-                        (Val::Reg(_), Val::Reg(_)) => Bytecode::SetRR,
-                        (Val::Reg(_), Val::Int(_)) => Bytecode::SetRI,
-                        (Val::Int(_), Val::Reg(_)) => Bytecode::SetIR,
-                        (Val::Int(_), Val::Int(_)) => Bytecode::SetII,
-                    });
-                    self.push_reg(*arr);
-                    self.push_val(*idx);
-                    self.push_val(*val);
-                }
-                Instruction::Len { to, arr } => {
-                    self.push_op(Bytecode::Len);
-                    self.push_reg(*arr);
-                    self.push_reg(*to);
-                }
-                Instruction::Type { to, obj } => {
-                    self.push_op(Bytecode::Type);
-                    self.push_reg(*obj);
-                    self.push_reg(*to);
-                }
-                Instruction::Putc { val } => {
-                    self.push_op(match val {
-                        Val::Reg(_) => Bytecode::PutcR,
-                        Val::Int(_) => Bytecode::PutcI,
-                    });
-                    self.push_val(*val);
-                }
-            }
-        }
-
-        self.push(Asm::FuncEndLoc(self.num_funcs));
-        asm_num_regs.finalize(self.num_regs + 1);
+    fn intern_label(&mut self, label: ast::Label) -> Key {
+        let text = label.text(self.tree);
+        self.interner.intern(text)
     }
 
     fn link(&self) -> Box<[u8]> {
@@ -571,14 +91,11 @@ impl<'a> Assembler<'a> {
                 Asm::Reg(_) => {
                     loc += std::mem::size_of::<Reg>();
                 }
-                Asm::LblRef(_) => {
+                Asm::LblRef(_) | Asm::FuncEndRef(_) => {
                     loc += std::mem::size_of::<Addr>();
                 }
                 Asm::LblLoc(lbl) => {
                     labels.insert(*lbl, loc.try_into().unwrap());
-                }
-                Asm::FuncEndRef(_) => {
-                    loc += std::mem::size_of::<Addr>();
                 }
                 Asm::FuncEndLoc(index) => {
                     func_ends.insert(*index, loc.try_into().unwrap());
@@ -614,8 +131,8 @@ impl<'a> Assembler<'a> {
         code.into_inner()
     }
 
-    fn push(&mut self, asm: Asm) {
-        self.asm.push(asm);
+    fn push<T: Assemble>(&mut self, value: T) {
+        value.assemble(self);
     }
 
     fn push_op(&mut self, op: Bytecode) {
@@ -627,34 +144,34 @@ impl<'a> Assembler<'a> {
         self.asm.push(Asm::Reg(reg));
     }
 
-    fn push_val(&mut self, val: Val) {
-        match val {
-            Val::Reg(reg) => self.push_reg(reg),
-            Val::Int(long) => self.push_int(long),
-        }
-    }
-
-    fn push_target(&mut self, target: Target) {
-        match target {
-            Target::Reg(reg) => self.push_reg(reg),
-            Target::Lbl(lbl) => self.push(Asm::LblRef(lbl)),
-        }
-    }
-
     fn push_int(&mut self, int: Int) {
-        self.push(Asm::Int(int));
+        self.asm.push(Asm::Int(int));
     }
 
     fn push_delayed_int(&mut self) -> Delayed<Int> {
         let ret = Rc::new(Cell::new(0));
-        self.push(Asm::DelayedInt(Rc::clone(&ret)));
+        self.asm.push(Asm::DelayedInt(Rc::clone(&ret)));
         Delayed(ret)
     }
 
     fn push_delayed_reg(&mut self) -> Delayed<Reg> {
         let ret = Rc::new(Cell::new(0));
-        self.push(Asm::DelayedReg(Rc::clone(&ret)));
+        self.asm.push(Asm::DelayedReg(Rc::clone(&ret)));
         Delayed(ret)
+    }
+
+    fn push_int_or_reg(&mut self, val: IntOrReg) {
+        match val {
+            IntOrReg::Int(int) => self.push_int(int),
+            IntOrReg::Reg(reg) => self.push_reg(reg),
+        }
+    }
+
+    fn push_lbl_or_reg(&mut self, val: LblOrReg) {
+        match val {
+            LblOrReg::Lbl(lbl) => self.asm.push(Asm::LblRef(lbl)),
+            LblOrReg::Reg(reg) => self.push_reg(reg),
+        }
     }
 }
 
@@ -688,4 +205,831 @@ fn unescape_string(str: &str) -> impl Iterator<Item = char> + '_ {
         }
     }
     Iter(str.chars())
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum IntOrReg {
+    Int(Int),
+    Reg(Reg),
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum LblOrReg {
+    Lbl(Key),
+    Reg(Reg),
+}
+
+macro_rules! args {
+    ($this:ident, $asm:ident; $($arg:ident),+) => {
+        ($($this.$arg($asm.tree)?.to_value($asm)),+)
+    };
+}
+
+trait ToValue {
+    type Output;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output;
+}
+
+impl ToValue for ast::CharLiteral {
+    type Output = Int;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        let text = self.text(asm.tree);
+        let mut unescaped = unescape_string(text);
+        let char = unescaped.next().unwrap();
+        assert!(unescaped.next().is_none());
+        u32::from(char).into()
+    }
+}
+
+impl ToValue for ast::IntLiteral {
+    type Output = Int;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        self.text(asm.tree).parse().unwrap()
+    }
+}
+
+impl ToValue for ast::Register {
+    type Output = Reg;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        self.text(asm.tree)[1..].parse().unwrap()
+    }
+}
+
+impl ToValue for ast::Label {
+    type Output = Key;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        asm.intern_label(self)
+    }
+}
+
+impl ToValue for ast::IntOrReg {
+    type Output = IntOrReg;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        match self {
+            Self::Char(ch) => IntOrReg::Int(ch.to_value(asm)),
+            Self::Int(int) => IntOrReg::Int(int.to_value(asm)),
+            Self::Reg(reg) => IntOrReg::Reg(reg.to_value(asm)),
+        }
+    }
+}
+
+impl ToValue for ast::LblOrReg {
+    type Output = LblOrReg;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        match self {
+            Self::Lbl(label) => LblOrReg::Lbl(label.to_value(asm)),
+            Self::Reg(reg) => LblOrReg::Reg(reg.to_value(asm)),
+        }
+    }
+}
+
+impl ToValue for ast::CharOrInt {
+    type Output = Int;
+
+    fn to_value(self, asm: &mut Assembler) -> Self::Output {
+        match self {
+            Self::Char(ch) => ch.to_value(asm),
+            Self::Int(int) => int.to_value(asm),
+        }
+    }
+}
+
+trait Assemble {
+    fn assemble(self, asm: &mut Assembler) -> Option<()>;
+}
+
+impl Assemble for ast::Function {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let name = asm.intern_label(self.name(asm.tree)?);
+        asm.push(Bytecode::Func);
+        asm.push(Asm::FuncEndRef(asm.num_funcs));
+        let asm_num_regs = asm.push_delayed_reg();
+        asm.push(Asm::LblLoc(name));
+
+        for instr in self.instructions(asm.tree) {
+            asm.push(instr);
+        }
+
+        asm.push(Asm::FuncEndLoc(asm.num_funcs));
+        asm_num_regs.finalize(asm.num_regs + 1);
+        Some(())
+    }
+}
+
+impl Assemble for ast::Instruction {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        match self {
+            Self::Label(inner) => inner.assemble(asm),
+            Self::Add(inner) => inner.assemble(asm),
+            Self::Addr(inner) => inner.assemble(asm),
+            Self::Arr(inner) => inner.assemble(asm),
+            Self::Call(inner) => inner.assemble(asm),
+            Self::Copy(inner) => inner.assemble(asm),
+            Self::Decr(inner) => inner.assemble(asm),
+            Self::Div(inner) => inner.assemble(asm),
+            Self::Exit(inner) => inner.assemble(asm),
+            Self::Get(inner) => inner.assemble(asm),
+            Self::Incr(inner) => inner.assemble(asm),
+            Self::Int(inner) => inner.assemble(asm),
+            Self::Jump(inner) => inner.assemble(asm),
+            Self::JumpEq(inner) => inner.assemble(asm),
+            Self::JumpEz(inner) => inner.assemble(asm),
+            Self::JumpGe(inner) => inner.assemble(asm),
+            Self::JumpGt(inner) => inner.assemble(asm),
+            Self::JumpLe(inner) => inner.assemble(asm),
+            Self::JumpLt(inner) => inner.assemble(asm),
+            Self::JumpNe(inner) => inner.assemble(asm),
+            Self::JumpNz(inner) => inner.assemble(asm),
+            Self::Len(inner) => inner.assemble(asm),
+            Self::Mod(inner) => inner.assemble(asm),
+            Self::Mul(inner) => inner.assemble(asm),
+            Self::Neg(inner) => inner.assemble(asm),
+            Self::Putc(inner) => inner.assemble(asm),
+            Self::Ret(inner) => inner.assemble(asm),
+            Self::Set(inner) => inner.assemble(asm),
+            Self::Str(inner) => inner.assemble(asm),
+            Self::Sub(inner) => inner.assemble(asm),
+            Self::Type(inner) => inner.assemble(asm),
+        }
+    }
+}
+
+impl Assemble for Int {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push_int(self);
+        Some(())
+    }
+}
+
+impl Assemble for Reg {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push_reg(self);
+        Some(())
+    }
+}
+
+impl Assemble for Key {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push(Asm::LblRef(self));
+        Some(())
+    }
+}
+
+impl Assemble for IntOrReg {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push_int_or_reg(self);
+        Some(())
+    }
+}
+
+impl Assemble for LblOrReg {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push_lbl_or_reg(self);
+        Some(())
+    }
+}
+
+impl Assemble for Bytecode {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push_op(self);
+        Some(())
+    }
+}
+
+impl Assemble for Asm {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.asm.push(self);
+        Some(())
+    }
+}
+
+impl Assemble for ast::LabelDef {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let name = asm.intern_label(self.name(asm.tree)?);
+        asm.push(Asm::LblLoc(name));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrAdd {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, lhs, rhs) = args![self, asm; to, lhs, rhs];
+        match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::AddRR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(0)) | (IntOrReg::Int(0), IntOrReg::Reg(reg)) => {
+                if reg == to {
+                    return Some(());
+                }
+                asm.push(Bytecode::Copy);
+                asm.push(reg);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(1)) | (IntOrReg::Int(1), IntOrReg::Reg(reg))
+                if reg == to =>
+            {
+                asm.push(Bytecode::Incr);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(-1)) | (IntOrReg::Int(-1), IntOrReg::Reg(reg))
+                if reg == to =>
+            {
+                asm.push(Bytecode::Decr);
+            }
+            (rhs @ IntOrReg::Reg(_), lhs @ IntOrReg::Int(_))
+            | (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::AddIR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                let out = lhs.checked_add(rhs).expect("int is out of range");
+                asm.push(Bytecode::Int);
+                asm.push(out);
+            }
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrAddr {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, label) = args!(self, asm; to, label);
+        asm.push(Bytecode::Addr);
+        asm.push(Asm::LblRef(label));
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrArr {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, len) = args!(self, asm; to, len);
+        asm.push(match len {
+            IntOrReg::Reg(_) => Bytecode::ArrR,
+            IntOrReg::Int(_) => Bytecode::ArrI,
+        });
+        asm.push(len);
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrCall {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, func) = args!(self, asm; to, func);
+        asm.push(match func {
+            LblOrReg::Lbl(_) => Bytecode::Call,
+            LblOrReg::Reg(_) => Bytecode::DCall,
+        });
+        asm.push(func);
+        let args: Vec<_> = self.args(asm.tree).map(|arg| arg.to_value(asm)).collect();
+        dbg!(func, args.len());
+        asm.push::<Int>(args.len().try_into().unwrap());
+        for arg in args {
+            asm.push(arg);
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrCopy {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, from) = args!(self, asm; to, from);
+        asm.push(Bytecode::Copy);
+        asm.push(from);
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrDecr {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let reg = self.reg(asm.tree)?.to_value(asm);
+        asm.push(Bytecode::Decr);
+        asm.push(reg);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrDiv {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, lhs, rhs) = args!(self, asm; to, lhs, rhs);
+        match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::DivRR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Reg(_), IntOrReg::Int(0)) => {
+                // TODO: handle 0 / 0
+                panic!("division by 0")
+            }
+            (IntOrReg::Int(0), IntOrReg::Reg(_)) => {
+                // TODO: handle 0 / 0
+                asm.push(Bytecode::Int);
+                asm.push::<Int>(0);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(1)) => {
+                if reg == to {
+                    return Some(());
+                }
+                asm.push(Bytecode::Copy);
+                asm.push(reg);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(-1)) => {
+                asm.push(Bytecode::Neg);
+                asm.push(reg);
+            }
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Int(_)) => {
+                asm.push(Bytecode::DivRI);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::DivIR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                let out = lhs.checked_div(rhs).unwrap_or_else(|| {
+                    if rhs == 0 {
+                        panic!("division by 0");
+                    } else {
+                        panic!("int is out of range");
+                    }
+                });
+                asm.push(Bytecode::Int);
+                asm.push(out);
+            }
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrExit {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        asm.push(Bytecode::Exit);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrGet {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, arr, idx) = args!(self, asm; to, arr, idx);
+        asm.push(match idx {
+            IntOrReg::Reg(_) => Bytecode::GetR,
+            IntOrReg::Int(_) => Bytecode::GetI,
+        });
+        asm.push(arr);
+        asm.push(idx);
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrIncr {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let reg = args!(self, asm; reg);
+        asm.push(Bytecode::Incr);
+        asm.push(reg);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrInt {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, int) = args!(self, asm; to, value);
+        asm.push(Bytecode::Int);
+        asm.push(int);
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJump {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let addr = args!(self, asm; addr);
+        asm.push(match addr {
+            LblOrReg::Reg(_) => Bytecode::DJump,
+            LblOrReg::Lbl(_) => Bytecode::Jump,
+        });
+        asm.push(addr);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpEq {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, addr) = args!(self, asm; lhs, rhs, addr);
+        let (op, lhs, rhs) = match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => (Bytecode::JumpEqRR, lhs, rhs),
+            (rhs @ IntOrReg::Reg(_), lhs @ IntOrReg::Int(_))
+            | (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => (Bytecode::JumpEqIR, lhs, rhs),
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                if lhs == rhs {
+                    asm.push(Bytecode::Jump);
+                    asm.push(Asm::LblRef(addr));
+                }
+                return Some(());
+            }
+        };
+        asm.push(op);
+        asm.push(lhs);
+        asm.push(rhs);
+        asm.push(Asm::LblRef(addr));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpEz {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (cond, addr) = args!(self, asm; cond, addr);
+        match cond {
+            IntOrReg::Reg(reg) => {
+                asm.push(Bytecode::JumpEz);
+                asm.push(reg);
+                asm.push(Asm::LblRef(addr));
+            }
+            IntOrReg::Int(0) => {
+                asm.push(Bytecode::Jump);
+                asm.push(Asm::LblRef(addr));
+            }
+            IntOrReg::Int(_) => {}
+        }
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpGe {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, addr) = args!(self, asm; lhs, rhs, addr);
+        asm.push(match (lhs, rhs) {
+            (IntOrReg::Reg(_), IntOrReg::Reg(_)) => Bytecode::JumpLeRR,
+            (IntOrReg::Reg(_), IntOrReg::Int(_)) => Bytecode::JumpLeIR,
+            (IntOrReg::Int(_), IntOrReg::Reg(_)) => Bytecode::JumpLeRI,
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                if lhs >= rhs {
+                    asm.push(Bytecode::Jump);
+                    asm.push(Asm::LblRef(addr));
+                }
+                return Some(());
+            }
+        });
+        asm.push(rhs);
+        asm.push(lhs);
+        asm.push(Asm::LblRef(addr));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpGt {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, addr) = args!(self, asm; lhs, rhs, addr);
+        asm.push(match (lhs, rhs) {
+            (IntOrReg::Reg(_), IntOrReg::Reg(_)) => Bytecode::JumpLtRR,
+            (IntOrReg::Reg(_), IntOrReg::Int(_)) => Bytecode::JumpLtIR,
+            (IntOrReg::Int(_), IntOrReg::Reg(_)) => Bytecode::JumpLtRI,
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                if lhs > rhs {
+                    asm.push(Bytecode::Jump);
+                    asm.push(Asm::LblRef(addr));
+                }
+                return Some(());
+            }
+        });
+        asm.push(rhs);
+        asm.push(lhs);
+        asm.push(Asm::LblRef(addr));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpLe {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, addr) = args!(self, asm; lhs, rhs, addr);
+        asm.push(match (lhs, rhs) {
+            (IntOrReg::Reg(_), IntOrReg::Reg(_)) => Bytecode::JumpLeRR,
+            (IntOrReg::Reg(_), IntOrReg::Int(_)) => Bytecode::JumpLeRI,
+            (IntOrReg::Int(_), IntOrReg::Reg(_)) => Bytecode::JumpLeIR,
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                if lhs <= rhs {
+                    asm.push(Bytecode::Jump);
+                    asm.push(Asm::LblRef(addr));
+                }
+                return Some(());
+            }
+        });
+        asm.push(lhs);
+        asm.push(rhs);
+        asm.push(Asm::LblRef(addr));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpLt {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, addr) = args!(self, asm; lhs, rhs, addr);
+        asm.push(match (lhs, rhs) {
+            (IntOrReg::Reg(_), IntOrReg::Reg(_)) => Bytecode::JumpLtRR,
+            (IntOrReg::Reg(_), IntOrReg::Int(_)) => Bytecode::JumpLtRI,
+            (IntOrReg::Int(_), IntOrReg::Reg(_)) => Bytecode::JumpLtIR,
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                if lhs < rhs {
+                    asm.push(Bytecode::Jump);
+                    asm.push(Asm::LblRef(addr));
+                }
+                return Some(());
+            }
+        });
+        asm.push(lhs);
+        asm.push(rhs);
+        asm.push(Asm::LblRef(addr));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpNe {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, addr) = args!(self, asm; lhs, rhs, addr);
+        let (op, lhs, rhs) = match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => (Bytecode::JumpNeRR, lhs, rhs),
+            (rhs @ IntOrReg::Reg(_), lhs @ IntOrReg::Int(_))
+            | (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => (Bytecode::JumpNeIR, lhs, rhs),
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                if lhs != rhs {
+                    asm.push(Bytecode::Jump);
+                    asm.push(Asm::LblRef(addr));
+                }
+                return Some(());
+            }
+        };
+        asm.push(op);
+        asm.push(lhs);
+        asm.push(rhs);
+        asm.push(Asm::LblRef(addr));
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrJumpNz {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (cond, addr) = args!(self, asm; cond, addr);
+        match cond {
+            IntOrReg::Reg(reg) => {
+                asm.push(Bytecode::JumpNz);
+                asm.push(reg);
+                asm.push(Asm::LblRef(addr));
+            }
+            IntOrReg::Int(0) => {}
+            IntOrReg::Int(_) => {
+                asm.push(Bytecode::Jump);
+                asm.push(Asm::LblRef(addr));
+            }
+        }
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrLen {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, arr) = args!(self, asm; to, arr);
+        asm.push(Bytecode::Len);
+        asm.push(arr);
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrMod {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, lhs, rhs) = args!(self, asm; to, lhs, rhs);
+        match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::ModRR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Reg(_), IntOrReg::Int(0)) => {
+                panic!("cannot compute x % 0")
+            }
+            (IntOrReg::Int(0), IntOrReg::Reg(_)) => {
+                // TODO: Handle 0 % 0
+                asm.push(Bytecode::Int);
+                asm.push::<Int>(0);
+            }
+            (IntOrReg::Reg(_), IntOrReg::Int(1 | -1)) => {
+                asm.push(Bytecode::Int);
+                asm.push::<Int>(0);
+            }
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Int(_)) => {
+                asm.push(Bytecode::ModRI);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::ModIR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                let out = lhs.checked_rem(rhs).unwrap_or_else(|| {
+                    if rhs == 0 {
+                        panic!("cannot compute x % 0");
+                    } else {
+                        panic!("int is out of range");
+                    }
+                });
+                asm.push(Bytecode::Int);
+                asm.push(out);
+            }
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrMul {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, lhs, rhs) = args!(self, asm; to, lhs, rhs);
+        match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::MulRR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Reg(_), IntOrReg::Int(0)) | (IntOrReg::Int(0), IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::Int);
+                asm.push::<Int>(0);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(1)) | (IntOrReg::Int(1), IntOrReg::Reg(reg)) => {
+                if reg == to {
+                    return Some(());
+                }
+                asm.push(Bytecode::Copy);
+                asm.push(reg);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(-1)) | (IntOrReg::Int(-1), IntOrReg::Reg(reg)) => {
+                asm.push(Bytecode::Neg);
+                asm.push(reg);
+            }
+            (rhs @ IntOrReg::Reg(_), lhs @ IntOrReg::Int(_))
+            | (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::MulIR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                let out = lhs.checked_mul(rhs).expect("int is out of range");
+                asm.push(Bytecode::Int);
+                asm.push(out);
+            }
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrNeg {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, rhs) = args!(self, asm; to, rhs);
+        match rhs {
+            IntOrReg::Reg(reg) => {
+                asm.push(Bytecode::Neg);
+                asm.push(reg);
+            }
+            IntOrReg::Int(int) => {
+                asm.push(Bytecode::Int);
+                asm.push(-int);
+            }
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrPutc {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let char = args!(self, asm; char);
+        asm.push(match char {
+            IntOrReg::Reg(_) => Bytecode::PutcR,
+            IntOrReg::Int(_) => Bytecode::PutcI,
+        });
+        asm.push(char);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrRet {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let ret = args!(self, asm; ret);
+        asm.push(match ret {
+            IntOrReg::Reg(_) => Bytecode::RetR,
+            IntOrReg::Int(_) => Bytecode::RetI,
+        });
+        asm.push(ret);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrSet {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (arr, idx, val) = args!(self, asm; arr, idx, val);
+        asm.push(match (idx, val) {
+            (IntOrReg::Reg(_), IntOrReg::Reg(_)) => Bytecode::SetRR,
+            (IntOrReg::Reg(_), IntOrReg::Int(_)) => Bytecode::SetRI,
+            (IntOrReg::Int(_), IntOrReg::Reg(_)) => Bytecode::SetIR,
+            (IntOrReg::Int(_), IntOrReg::Int(_)) => Bytecode::SetII,
+        });
+        asm.push(arr);
+        asm.push(idx);
+        asm.push(val);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrStr {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let to = args!(self, asm; to);
+        let str = self.string(asm.tree)?.text(asm.tree);
+        asm.push(Bytecode::Str);
+
+        let str_len = asm.push_delayed_int();
+        let mut len = 0;
+        for ch in unescape_string(&str[1..]) {
+            asm.push::<Int>(u32::from(ch).into());
+            len += 1;
+        }
+        str_len.finalize(len);
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrSub {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, lhs, rhs) = args!(self, asm; to, lhs, rhs);
+        match (lhs, rhs) {
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::SubRR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(0)) => {
+                if reg == to {
+                    return Some(());
+                }
+                asm.push(Bytecode::Copy);
+                asm.push(reg);
+            }
+            (IntOrReg::Int(0), IntOrReg::Reg(reg)) => {
+                asm.push(Bytecode::Neg);
+                asm.push(reg);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(1)) if reg == to => {
+                asm.push(Bytecode::Decr);
+            }
+            (IntOrReg::Reg(reg), IntOrReg::Int(-1)) if reg == to => {
+                asm.push(Bytecode::Incr);
+            }
+            (lhs @ IntOrReg::Reg(_), rhs @ IntOrReg::Int(_)) => {
+                asm.push(Bytecode::SubRI);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (lhs @ IntOrReg::Int(_), rhs @ IntOrReg::Reg(_)) => {
+                asm.push(Bytecode::SubIR);
+                asm.push(lhs);
+                asm.push(rhs);
+            }
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                let out = lhs.checked_sub(rhs).expect("int is out of range");
+                asm.push(Bytecode::Int);
+                asm.push(out);
+            }
+        }
+        asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrType {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, obj) = args!(self, asm; to, obj);
+        asm.push(Bytecode::Type);
+        asm.push(obj);
+        asm.push(to);
+        Some(())
+    }
 }

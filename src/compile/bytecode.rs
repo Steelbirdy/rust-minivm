@@ -20,7 +20,8 @@ impl ToBytes for Bytecode {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Bytecode {
-    Exit = 0,
+    Missing = 0,
+    Exit,
     Func,
     Copy,
     Jump,
@@ -36,28 +37,10 @@ pub enum Bytecode {
     JumpEqIR,
     JumpNeRR,
     JumpNeIR,
-    Call0,
-    Call1,
-    Call2,
-    Call3,
-    Call4,
-    Call5,
-    Call6,
-    Call7,
-    Call8,
-    CallV,
+    Call,
     Addr,
     DJump,
-    DCall0,
-    DCall1,
-    DCall2,
-    DCall3,
-    DCall4,
-    DCall5,
-    DCall6,
-    DCall7,
-    DCall8,
-    DCallV,
+    DCall,
     RetR,
     RetI,
     Int,
@@ -95,7 +78,6 @@ pub enum Bytecode {
 
 impl Bytecode {
     pub const MAX: u8 = Self::__MAX as u8;
-    pub const MAX_INLINE_ARGS: usize = 8;
 
     pub fn from_raw(raw: u8) -> Option<Self> {
         if raw > Self::MAX {
@@ -108,32 +90,11 @@ impl Bytecode {
         std::mem::transmute(raw)
     }
 
-    pub fn call(num_args: usize) -> Self {
-        const BASE: Bytecode = Bytecode::Call0;
-
-        if num_args <= Self::MAX_INLINE_ARGS {
-            let num_args: u8 = num_args.try_into().unwrap();
-            unsafe { std::mem::transmute(BASE as u8 + num_args) }
-        } else {
-            Self::CallV
-        }
-    }
-
-    pub fn dcall(num_args: usize) -> Self {
-        const BASE: Bytecode = Bytecode::DCall0;
-
-        if num_args <= Self::MAX_INLINE_ARGS {
-            let num_args: u8 = num_args.try_into().unwrap();
-            unsafe { std::mem::transmute(BASE as u8 + num_args) }
-        } else {
-            Self::DCallV
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         use Bytecode::*;
 
         match self {
+            Missing => "<missing>",
             Exit => "exit",
             Func => "func",
             Copy => "copy",
@@ -150,28 +111,10 @@ impl Bytecode {
             JumpEqIR => "jumpeq_ir",
             JumpNeRR => "jumpne_rr",
             JumpNeIR => "jumpne_ir",
-            Call0 => "call0",
-            Call1 => "call1",
-            Call2 => "call2",
-            Call3 => "call3",
-            Call4 => "call4",
-            Call5 => "call5",
-            Call6 => "call6",
-            Call7 => "call7",
-            Call8 => "call8",
-            CallV => "callv",
+            Call => "call",
             Addr => "addr",
             DJump => "djump",
-            DCall0 => "dcall0",
-            DCall1 => "dcall1",
-            DCall2 => "dcall2",
-            DCall3 => "dcall3",
-            DCall4 => "dcall4",
-            DCall5 => "dcall5",
-            DCall6 => "dcall6",
-            DCall7 => "dcall7",
-            DCall8 => "dcall8",
-            DCallV => "dcallv",
+            DCall => "dcall",
             RetR => "ret_r",
             RetI => "ret_i",
             Int => "int",
