@@ -3,15 +3,15 @@
 use crate::{
     common::{
         config::{self, RunConfig},
-        Addr, ByteReader, Int, Read, Reg,
+        Addr, Int, Read, Reg,
     },
     vm::{disassemble_instruction, Gc, Opcode, Stack, Value},
 };
 use std::io::{BufWriter, StdoutLock, Write};
 
-pub struct Vm<'a> {
-    code: ByteReader<'a>,
-    gc: &'a mut Gc,
+pub struct Vm<'a, R: Read> {
+    code: R,
+    gc: Gc,
     call_stack: Stack<usize, { config::NUM_FRAMES }>,
     stdout: BufWriter<StdoutLock<'static>>,
     char_buf: [u8; 4],
@@ -19,8 +19,8 @@ pub struct Vm<'a> {
     config: &'a RunConfig,
 }
 
-impl<'a> Vm<'a> {
-    pub fn new(code: ByteReader<'a>, gc: &'a mut Gc, config: &'a RunConfig) -> Self {
+impl<'a, R: Read> Vm<'a, R> {
+    pub fn new(code: R, gc: Gc, config: &'a RunConfig) -> Self {
         Self {
             code,
             gc,
@@ -122,8 +122,9 @@ impl<'a> Vm<'a> {
     }
 
     fn debug_next(&mut self) {
-        self.code
-            .at_checkpoint(|| disassemble_instruction(&self.code, &mut self.buf));
+        let offset = self.code.offset();
+        disassemble_instruction(&self.code, &mut self.buf);
+        self.code.set_offset(offset);
         print!("{}", self.buf);
         self.buf.clear();
     }
@@ -197,25 +198,25 @@ macro_rules! load {
     };
 }
 
-fn func(vm: &mut Vm) {
+fn func<R: Read>(vm: &mut Vm<R>) {
     jump(vm);
 }
 
-fn copy_a(vm: &mut Vm) {
+fn copy_a<R: Read>(vm: &mut Vm<R>) {
     let addr = take!(vm, Addr);
     *load!(mut vm) = Value::int_unchecked(addr.into());
 }
 
-fn copy_r(vm: &mut Vm) {
+fn copy_r<R: Read>(vm: &mut Vm<R>) {
     *load!(mut vm) = load!(vm);
 }
 
-fn jump(vm: &mut Vm) {
+fn jump<R: Read>(vm: &mut Vm<R>) {
     let addr = take!(vm, Addr);
     vm.code.set_offset(addr as _);
 }
 
-fn jump_ez(vm: &mut Vm) {
+fn jump_ez<R: Read>(vm: &mut Vm<R>) {
     if load!(vm) == 0 {
         vm.code.set_offset(take!(vm, Addr) as _);
     } else {
@@ -224,7 +225,7 @@ fn jump_ez(vm: &mut Vm) {
 }
 
 #[allow(clippy::if_not_else)]
-fn jump_nz(vm: &mut Vm) {
+fn jump_nz<R: Read>(vm: &mut Vm<R>) {
     if load!(vm) != 0 {
         vm.code.set_offset(take!(vm, Addr) as _);
     } else {
@@ -234,7 +235,7 @@ fn jump_nz(vm: &mut Vm) {
 
 macro_rules! binary_jump_op {
     (rr $name:ident $op:tt) => {
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             if load!(vm) $op load!(vm) {
                 vm.code.set_offset(take!(vm, Addr) as _);
             } else {
@@ -243,7 +244,7 @@ macro_rules! binary_jump_op {
         }
     };
     (ri $name:ident $op:tt) => {
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             if load!(vm) $op take!(vm, Value) {
                 vm.code.set_offset(take!(vm, Addr) as _);
             } else {
@@ -252,7 +253,7 @@ macro_rules! binary_jump_op {
         }
     };
     (ir $name:ident $op:tt) => {
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             if take!(vm, Value) $op load!(vm) {
                 vm.code.set_offset(take!(vm, Addr) as _);
             } else {
@@ -276,7 +277,7 @@ binary_jump_op!(ir jumpne_ir !=);
 macro_rules! call_ops {
     ($($name:ident $($i:literal $arg:ident),*;)+) => {
         $(
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             let addr = take!(vm, Addr);
 
             $(
@@ -306,7 +307,7 @@ call_ops![
     call8 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6, 7 arg7, 8 arg8;
 ];
 
-fn callv(vm: &mut Vm) {
+fn callv<R: Read>(vm: &mut Vm<R>) {
     let addr = take!(vm, Addr);
     let num_args = take!(vm, Int);
     let mut args = Vec::with_capacity(num_args as usize);
@@ -321,7 +322,7 @@ fn callv(vm: &mut Vm) {
     }
 }
 
-fn djump(vm: &mut Vm) {
+fn djump<R: Read>(vm: &mut Vm<R>) {
     let addr = load!(vm).as_int_unchecked();
     debug_assert!(addr >= 0);
     vm.code.set_offset(addr as usize);
@@ -330,7 +331,7 @@ fn djump(vm: &mut Vm) {
 macro_rules! dcall_ops {
     ($($name:ident $($num_args:literal)?;)+) => {
         $(
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             let addr = load!(vm);
             $(let args = [(); $num_args].map(|_| load!(vm));)?
             let num_regs = take!(vm, Reg);
@@ -358,7 +359,7 @@ dcall_ops![
     dcall8 8;
 ];
 
-fn dcallv(vm: &mut Vm) {
+fn dcallv<R: Read>(vm: &mut Vm<R>) {
     let addr = load!(vm);
     let num_args = take!(vm, Int);
     let mut args = Vec::with_capacity(num_args as usize);
@@ -373,40 +374,40 @@ fn dcallv(vm: &mut Vm) {
     }
 }
 
-fn ret_r(vm: &mut Vm) {
+fn ret_r<R: Read>(vm: &mut Vm<R>) {
     let ret = load!(vm);
     vm.pop_frame();
     *load!(mut vm) = ret;
 }
 
-fn ret_i(vm: &mut Vm) {
+fn ret_i<R: Read>(vm: &mut Vm<R>) {
     let ret = take!(vm, Value);
     vm.pop_frame();
     *load!(mut vm) = ret;
 }
 
-fn value(vm: &mut Vm) {
+fn value<R: Read>(vm: &mut Vm<R>) {
     let val = take!(vm, Value);
     *load!(mut vm) = val;
 }
 
 macro_rules! binary_op {
     (rr $name:ident $op:tt) => {
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             let lhs = load!(vm);
             let rhs = load!(vm);
             *load!(mut vm) = lhs $op rhs;
         }
     };
     (ri $name:ident $op:tt) => {
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             let lhs = load!(vm);
             let rhs = take!(vm, Value);
             *load!(mut vm) = lhs $op rhs;
         }
     };
     (ir $name:ident $op:tt) => {
-        fn $name(vm: &mut Vm) {
+        fn $name<R: Read>(vm: &mut Vm<R>) {
             let lhs = take!(vm, Value);
             let rhs = load!(vm);
             *load!(mut vm) = lhs $op rhs;
@@ -428,88 +429,88 @@ binary_op!(rr mod_rr %);
 binary_op!(ri mod_ri %);
 binary_op!(ir mod_ir %);
 
-fn neg(vm: &mut Vm) {
+fn neg<R: Read>(vm: &mut Vm<R>) {
     *load!(mut vm) = load!(vm);
 }
 
-fn incr(vm: &mut Vm) {
+fn incr<R: Read>(vm: &mut Vm<R>) {
     *load!(mut vm) += 1;
 }
 
-fn decr(vm: &mut Vm) {
+fn decr<R: Read>(vm: &mut Vm<R>) {
     *load!(mut vm) -= 1;
 }
 
-fn arr_r(vm: &mut Vm) {
+fn arr_r<R: Read>(vm: &mut Vm<R>) {
     let len = load!(vm);
     assert!(len >= 0);
     *load!(mut vm) = Value::ptr_unchecked(vm.gc.alloc(len.as_int_unchecked() as _));
     vm.gc.run();
 }
 
-fn arr_i(vm: &mut Vm) {
+fn arr_i<R: Read>(vm: &mut Vm<R>) {
     let len = take!(vm, Int);
     assert!(len >= 0);
     *load!(mut vm) = Value::ptr_unchecked(vm.gc.alloc(len as _));
     vm.gc.run();
 }
 
-fn get_r(vm: &mut Vm) {
+fn get_r<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = load!(vm).as_int_unchecked();
     *load!(mut vm) = vm.gc.get(arr, idx as usize);
 }
 
-fn get_i(vm: &mut Vm) {
+fn get_i<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = take!(vm, Int);
     *load!(mut vm) = vm.gc.get(arr, idx as usize);
 }
 
-fn set_ii(vm: &mut Vm) {
+fn set_ii<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = take!(vm, Int);
     let val = take!(vm, Value);
     *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
-fn set_rr(vm: &mut Vm) {
+fn set_rr<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = load!(vm).as_int_unchecked();
     let val = load!(vm);
     *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
-fn set_ri(vm: &mut Vm) {
+fn set_ri<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = load!(vm).as_int_unchecked();
     let val = take!(vm, Value);
     *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
-fn set_ir(vm: &mut Vm) {
+fn set_ir<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     let idx = take!(vm, Int);
     let val = take!(vm, Value);
     *vm.gc.get_mut(arr, idx as usize) = val;
 }
 
-fn len(vm: &mut Vm) {
+fn len<R: Read>(vm: &mut Vm<R>) {
     let arr = load!(vm).as_ptr_unchecked();
     *load!(mut vm) = Value::int_unchecked(vm.gc.array_len(arr).into());
 }
 
-fn r#type(vm: &mut Vm) {
+fn r#type<R: Read>(vm: &mut Vm<R>) {
     let kind = load!(vm).kind() as u8;
     *load!(mut vm) = Value::int_unchecked(kind.into());
 }
 
-fn putc_r(vm: &mut Vm) {
+fn putc_r<R: Read>(vm: &mut Vm<R>) {
     let ch = load!(vm).as_int_unchecked();
     vm.write(ch.try_into().unwrap());
 }
 
-fn putc_i(vm: &mut Vm) {
+fn putc_i<R: Read>(vm: &mut Vm<R>) {
     let ch = take!(vm, u32);
     vm.write(ch);
 }

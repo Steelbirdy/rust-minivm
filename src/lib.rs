@@ -50,5 +50,5 @@ pub fn run(process: &config::Process) -> Option<Value> {
     if process.config.trace_execution {
         println!("=== EXECUTION ===");
     }
-    Some(Vm::new(opcode.as_ref(), &mut gc, &process.config).run())
+    Some(Vm::new(opcode, gc, &process.config).run())
 }
