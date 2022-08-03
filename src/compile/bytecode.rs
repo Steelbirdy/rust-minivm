@@ -95,7 +95,7 @@ impl Bytecode {
     unsafe fn from_raw_unchecked(raw: u8) -> Self {
         std::mem::transmute(raw)
     }
-    
+
     pub fn as_str(self) -> &'static str {
         use Bytecode::*;
 

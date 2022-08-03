@@ -13,7 +13,6 @@ pub struct Vm<'a> {
     code: ByteReader<'a>,
     gc: &'a mut Gc,
     call_stack: Stack<usize, { config::NUM_FRAMES }>,
-    stop: bool,
     stdout: BufWriter<StdoutLock<'static>>,
     char_buf: [u8; 4],
     buf: String,
@@ -26,7 +25,6 @@ impl<'a> Vm<'a> {
             code,
             gc,
             call_stack: Stack::new(),
-            stop: false,
             stdout: BufWriter::new(std::io::stdout().lock()),
             char_buf: [0; 4],
             buf: String::new(),
@@ -36,32 +34,91 @@ impl<'a> Vm<'a> {
 
     pub fn run(&mut self) -> Value {
         const OUT: Reg = 0;
-        while !self.code.is_at_end() && !self.stop {
-            self.next();
+        while !self.code.is_at_end() {
+            if self.config.trace_execution {
+                self.debug_next();
+            }
+
+            #[cfg(feature = "unsafe")]
+            let opcode = unsafe { self.code.take_unchecked::<Opcode>() };
+
+            #[cfg(not(feature = "unsafe"))]
+            let opcode = self.code.take::<Opcode>().unwrap();
+
+            match opcode {
+                Opcode::Exit => break,
+                Opcode::Func => func(self),
+                Opcode::CopyA => copy_a(self),
+                Opcode::CopyR => copy_r(self),
+                Opcode::Jump => jump(self),
+                Opcode::JumpEz => jump_ez(self),
+                Opcode::JumpNz => jump_nz(self),
+                Opcode::JumpLtRR => jumplt_rr(self),
+                Opcode::JumpLtRI => jumplt_ri(self),
+                Opcode::JumpLtIR => jumplt_ir(self),
+                Opcode::JumpLeRR => jumple_rr(self),
+                Opcode::JumpLeRI => jumple_ri(self),
+                Opcode::JumpLeIR => jumple_ir(self),
+                Opcode::JumpEqRR => jumpeq_rr(self),
+                Opcode::JumpEqIR => jumpeq_ir(self),
+                Opcode::JumpNeRR => jumpne_rr(self),
+                Opcode::JumpNeIR => jumpne_ir(self),
+                Opcode::Call0 => call0(self),
+                Opcode::Call1 => call1(self),
+                Opcode::Call2 => call2(self),
+                Opcode::Call3 => call3(self),
+                Opcode::Call4 => call4(self),
+                Opcode::Call5 => call5(self),
+                Opcode::Call6 => call6(self),
+                Opcode::Call7 => call7(self),
+                Opcode::Call8 => call8(self),
+                Opcode::CallV => callv(self),
+                Opcode::DJump => djump(self),
+                Opcode::DCall0 => dcall0(self),
+                Opcode::DCall1 => dcall1(self),
+                Opcode::DCall2 => dcall2(self),
+                Opcode::DCall3 => dcall3(self),
+                Opcode::DCall4 => dcall4(self),
+                Opcode::DCall5 => dcall5(self),
+                Opcode::DCall6 => dcall6(self),
+                Opcode::DCall7 => dcall7(self),
+                Opcode::DCall8 => dcall8(self),
+                Opcode::DCallV => dcallv(self),
+                Opcode::RetR => ret_r(self),
+                Opcode::RetI => ret_i(self),
+                Opcode::Value => value(self),
+                Opcode::AddRR => add_rr(self),
+                Opcode::AddIR => add_ir(self),
+                Opcode::SubRR => sub_rr(self),
+                Opcode::SubRI => sub_ri(self),
+                Opcode::SubIR => sub_ir(self),
+                Opcode::MulRR => mul_rr(self),
+                Opcode::MulIR => mul_ir(self),
+                Opcode::DivRR => div_rr(self),
+                Opcode::DivRI => div_ri(self),
+                Opcode::DivIR => div_ir(self),
+                Opcode::ModRR => mod_rr(self),
+                Opcode::ModRI => mod_ri(self),
+                Opcode::ModIR => mod_ir(self),
+                Opcode::Neg => neg(self),
+                Opcode::Incr => incr(self),
+                Opcode::Decr => decr(self),
+                Opcode::ArrR => arr_r(self),
+                Opcode::ArrI => arr_i(self),
+                Opcode::GetR => get_r(self),
+                Opcode::GetI => get_i(self),
+                Opcode::SetII => set_ii(self),
+                Opcode::SetRR => set_rr(self),
+                Opcode::SetRI => set_ri(self),
+                Opcode::SetIR => set_ir(self),
+                Opcode::Len => len(self),
+                Opcode::Type => r#type(self),
+                Opcode::PutcR => putc_r(self),
+                Opcode::PutcI => putc_i(self),
+                Opcode::__MAX => unreachable!(),
+            }
         }
         self.gc[OUT]
-    }
-
-    #[cfg(feature = "unsafe")]
-    fn next(&mut self) {
-        if self.config.trace_execution {
-            self.debug_next();
-        }
-        unsafe {
-            let opcode = self.code.take_unchecked::<Opcode>();
-            let func = OPCODE_FN_PTRS.get_unchecked(opcode as usize);
-            func(self);
-        }
-    }
-
-    #[cfg(not(feature = "unsafe"))]
-    fn next(&mut self) {
-        if self.config.trace_execution {
-            self.debug_next();
-        }
-        let opcode = self.code.take::<Opcode>().unwrap();
-        let func = OPCODE_FN_PTRS[opcode as usize];
-        func(self);
     }
 
     fn debug_next(&mut self) {
@@ -92,7 +149,6 @@ impl<'a> Vm<'a> {
             self.code.set_offset(offset);
             offset - std::mem::size_of::<Reg>()
         } else {
-            self.stop = true;
             return;
         };
         let num_regs = unsafe { self.code.read_at_unchecked::<Reg>(offset) };
@@ -105,24 +161,12 @@ impl<'a> Vm<'a> {
             self.code.set_offset(offset);
             offset - std::mem::size_of::<Reg>()
         } else {
-            self.stop = true;
             return;
         };
         let num_regs = self.code.read_at::<Reg>(offset).unwrap();
         self.gc.pop_frame(num_regs);
     }
 }
-
-type OpcodeFn = fn(&mut Vm);
-
-static OPCODE_FN_PTRS: &[OpcodeFn] = &[
-    exit, func, copy_a, copy_r, jump, jump_ez, jump_nz, jumplt_rr, jumplt_ri, jumplt_ir, jumple_rr,
-    jumple_ri, jumple_ir, jumpeq_rr, jumpeq_ir, jumpne_rr, jumpne_ir, call0, call1, call2, call3,
-    call4, call5, call6, call7, call8, callv, djump, dcall0, dcall1, dcall2, dcall3, dcall4,
-    dcall5, dcall6, dcall7, dcall8, dcallv, ret_r, ret_i, value, add_rr, add_ir, sub_rr, sub_ri,
-    sub_ir, mul_rr, mul_ir, div_rr, div_ri, div_ir, mod_rr, mod_ri, mod_ir, neg, incr, decr, arr_r,
-    arr_i, get_r, get_i, set_ii, set_rr, set_ri, set_ir, len, r#type, putc_r, putc_i, __max,
-];
 
 #[cfg(feature = "unsafe")]
 macro_rules! take {
@@ -151,10 +195,6 @@ macro_rules! load {
     ($vm:ident) => {
         $vm.gc[take!($vm, Reg)]
     };
-}
-
-fn exit(vm: &mut Vm) {
-    vm.stop = true;
 }
 
 fn func(vm: &mut Vm) {
@@ -472,8 +512,4 @@ fn putc_r(vm: &mut Vm) {
 fn putc_i(vm: &mut Vm) {
     let ch = take!(vm, u32);
     vm.write(ch);
-}
-
-fn __max(_vm: &mut Vm) {
-    unimplemented!()
 }

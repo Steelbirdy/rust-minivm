@@ -493,7 +493,6 @@ impl Assemble for ast::InstrCall {
         });
         asm.push(func);
         let args: Vec<_> = self.args(asm.tree).map(|arg| arg.to_value(asm)).collect();
-        dbg!(func, args.len());
         asm.push::<Int>(args.len().try_into().unwrap());
         for arg in args {
             asm.push(arg);

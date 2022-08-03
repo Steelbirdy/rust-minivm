@@ -10,7 +10,8 @@ pub struct Stack<T, const CAP: usize> {
 #[cfg(feature = "unsafe")]
 impl<T, const CAP: usize> Stack<T, CAP> {
     pub const fn new() -> Self {
-        let arr: [std::mem::MaybeUninit<T>; CAP] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let arr: [std::mem::MaybeUninit<T>; CAP] =
+            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         Self { arr, len: 0 }
     }
 
