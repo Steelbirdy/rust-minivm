@@ -22,7 +22,7 @@ impl Key {
 #[cfg(not(feature = "unsafe"))]
 impl Key {
     fn from_raw(raw: usize) -> Option<Self> {
-        lasso::Key::try_from_usize(raw).map(Key)
+        lasso::Key::try_from_usize(raw - 1).map(Key)
     }
 
     pub fn entry_point() -> Self {

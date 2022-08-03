@@ -310,7 +310,7 @@ impl Assemble for ast::Function {
         let name = asm.intern_label(self.name(asm.tree)?);
         asm.push(Bytecode::Func);
         asm.push(Asm::FuncEndRef(asm.num_funcs));
-        let asm_num_regs = asm.push_delayed_reg();
+        let num_regs = asm.push_delayed_reg();
         asm.push(Asm::LblLoc(name));
 
         for instr in self.instructions(asm.tree) {
@@ -318,7 +318,7 @@ impl Assemble for ast::Function {
         }
 
         asm.push(Asm::FuncEndLoc(asm.num_funcs));
-        asm_num_regs.finalize(asm.num_regs + 1);
+        num_regs.finalize(asm.num_regs + 1);
         Some(())
     }
 }
@@ -465,7 +465,7 @@ impl Assemble for ast::InstrAddr {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
         let (to, label) = args!(self, asm; to, label);
         asm.push(Bytecode::Addr);
-        asm.push(Asm::LblRef(label));
+        asm.push(label);
         asm.push(to);
         Some(())
     }
