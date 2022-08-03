@@ -2,12 +2,33 @@ use crate::{
     common::{config::NUM_REGISTERS, Reg},
     vm::{
         value::{Value, ValueKind},
-        Len, Ptr,
+        Len,
     },
 };
 use std::ops::{Index, IndexMut};
 
 const GC_MIN_THRESHOLD: usize = 1 << 12;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct Ptr(usize);
+
+impl Ptr {
+    pub const MIN: Self = Ptr(usize::MIN >> 1);
+    pub const MAX: Self = Ptr(usize::MAX >> 1);
+
+    pub const fn to_usize(self) -> usize {
+        self.0
+    }
+
+    pub(in crate::vm) const fn from_le_bytes(bytes: [u8; std::mem::size_of::<Ptr>()]) -> Self {
+        Self(usize::from_le_bytes(bytes))
+    }
+
+    pub(in crate::vm) const fn to_le_bytes(self) -> [u8; std::mem::size_of::<Ptr>()] {
+        self.0.to_le_bytes()
+    }
+}
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -128,23 +149,23 @@ impl Gc {
         self.buf[ret] = GcData::new_header(false, ValueKind::Ptr, len);
         self.cur_alloc += len_usize + 1;
         self.buf_used = next_head;
-        ret + 1
+        Ptr(ret + 1)
     }
 
     #[must_use]
     pub fn array_len(&self, ptr: Ptr) -> Len {
-        self.buf[ptr - 1].header().size
+        self.buf[ptr.0 - 1].header().size
     }
 
     #[must_use]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
-        self.buf[ptr - 1].header().len()
+        self.buf[ptr.0 - 1].header().len()
     }
 
     #[must_use]
     pub fn array(&self, ptr: Ptr) -> &[Value] {
         let len = self.array_len(ptr) as usize;
-        assert!(ptr + len <= self.buf.len());
+        assert!(ptr.0 + len <= self.buf.len());
         // SAFETY:
         // * `GcData` has the same layout as `Value` since
         //   `GcData` is a union with `Value` as one of its fields.
@@ -153,7 +174,7 @@ impl Gc {
         //   the slice is in bounds.
         // qed
         unsafe {
-            let ptr = self.buf.as_ptr().add(ptr);
+            let ptr = self.buf.as_ptr().add(ptr.0);
             std::slice::from_raw_parts(ptr.cast::<Value>(), len)
         }
     }
@@ -163,7 +184,7 @@ impl Gc {
         let len = self.array_len_usize(ptr);
         // SAFETY: See `Gc::array`.
         unsafe {
-            let ptr = self.buf.as_mut_ptr().add(ptr);
+            let ptr = self.buf.as_mut_ptr().add(ptr.0);
             std::slice::from_raw_parts_mut(ptr.cast::<Value>(), len)
         }
     }
@@ -177,7 +198,7 @@ impl Gc {
         macro_rules! move_array {
             (|$i:ident| $get:expr) => {{
                 if $get.is_ptr() {
-                    let n = $get.as_ptr_unchecked();
+                    let n = $get.as_ptr_unchecked().0;
                     if n < self.buf_used {
                         let new_pos = self.move_buf[n];
                         assert_ne!(
@@ -185,7 +206,7 @@ impl Gc {
                             usize::MAX,
                             "indexed into an uninitialized section of `move_buf`"
                         );
-                        $get = Value::ptr_unchecked(new_pos);
+                        $get = Value::ptr_unchecked(Ptr(new_pos));
                     }
                 }
             }};
@@ -249,7 +270,7 @@ impl Gc {
 
     fn mark(&mut self, value: Value) {
         if value.is_ptr() {
-            let index = value.as_ptr_unchecked();
+            let index = value.as_ptr_unchecked().0;
             if index < self.buf_used {
                 let header = self.buf[index - 1].header_mut();
                 if header.is_marked() {

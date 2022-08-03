@@ -14,5 +14,5 @@ pub use stack::Stack;
 pub use tracing::{register_is_used, trace_jumps, Jump, JumpSet};
 pub use value::{Value, ValueKind};
 
-pub type Ptr = usize;
+pub type Ptr = gc::Ptr;
 pub type Len = u32;

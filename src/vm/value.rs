@@ -66,8 +66,8 @@ impl Value {
     pub const INT_MAX: Value = Value::int_unchecked(Int::MAX >> 1);
     pub const INT_MIN: Value = Value::int_unchecked(Int::MIN >> 1);
 
-    pub const PTR_MAX: Value = Value::ptr_unchecked(Ptr::MAX >> 1);
-    pub const PTR_MIN: Value = Value::ptr_unchecked(Ptr::MIN >> 1);
+    pub const PTR_MAX: Value = Value::ptr_unchecked(Ptr::MAX);
+    pub const PTR_MIN: Value = Value::ptr_unchecked(Ptr::MIN);
 
     #[must_use]
     pub fn int(value: Int) -> Self {
@@ -78,8 +78,8 @@ impl Value {
 
     #[must_use]
     pub fn ptr(ptr: Ptr) -> Self {
-        assert!(Self::PTR_MIN.as_ptr_unchecked() <= ptr);
-        assert!(ptr <= Self::PTR_MAX.as_ptr_unchecked());
+        assert!(Ptr::MIN.to_usize() <= ptr.to_usize());
+        assert!(ptr.to_usize() <= Ptr::MAX.to_usize());
         Self::ptr_unchecked(ptr)
     }
 
@@ -91,7 +91,7 @@ impl Value {
 
     #[must_use]
     pub const fn ptr_unchecked(ptr: Ptr) -> Self {
-        let bytes = ((ptr << 1) | 1).to_le_bytes();
+        let bytes = ((ptr.to_usize() << 1) | 1).to_le_bytes();
         Self(Repr::from_le_bytes(bytes))
     }
 
@@ -150,8 +150,7 @@ impl Value {
 
     #[must_use]
     pub const fn as_ptr_unchecked(self) -> Ptr {
-        let val = Ptr::from_le_bytes(self.0.to_le_bytes());
-        val >> 1
+        Ptr::from_le_bytes(self.0.to_le_bytes())
     }
 
     #[must_use]
@@ -261,7 +260,7 @@ mod tests {
     #[test]
     fn cmp_across_types() {
         let v1 = Value::int(10);
-        let v2 = Value::ptr(13);
+        let v2 = Value::ptr(Ptr::from_le_bytes([13, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!(v2.as_int_unchecked(), 13);
 
         assert!(v1 < v2);
@@ -272,7 +271,7 @@ mod tests {
 
         assert_eq!(
             Value::PTR_MAX.as_int_unchecked(),
-            Value::int_unchecked((Ptr::MAX >> 1).try_into().unwrap())
+            Value::int_unchecked(Ptr::MAX.to_usize().try_into().unwrap())
         );
     }
 
