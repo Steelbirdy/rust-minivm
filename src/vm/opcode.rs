@@ -177,17 +177,20 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 writer.push(lhs);
                 writer.push(rhs);
                 writer.push(to);
+                registers.set_named(to, false);
             } else if registers.named(rhs) {
                 let rhs = registers[rhs];
                 writer.push(Opcode::$ir);
                 writer.push(rhs);
                 writer.push(lhs);
                 writer.push(to);
+                registers.set_named(to, false);
             } else {
                 writer.push(Opcode::$rr);
                 writer.push(lhs);
                 writer.push(rhs);
                 writer.push(to);
+                registers.set_named(to, false);
             }
         }};
         (rr $op:tt $rr:ident $ir:ident $ri:ident) => {{
@@ -203,17 +206,20 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 writer.push(lhs);
                 writer.push(rhs);
                 writer.push(to);
+                registers.set_named(to, false);
             } else if registers.named(rhs) {
                 let rhs = registers[rhs];
                 writer.push(Opcode::$ri);
                 writer.push(lhs);
                 writer.push(rhs);
                 writer.push(to);
+                registers.set_named(to, false);
             } else {
                 writer.push(Opcode::$rr);
                 writer.push(lhs);
                 writer.push(rhs);
                 writer.push(to);
+                registers.set_named(to, false);
             }
         }};
         (ir $op:tt $ir:ident) => {{
@@ -228,6 +234,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 writer.push::<Value>(Value::int(lhs));
                 writer.push(rhs);
                 writer.push(to);
+                registers.set_named(to, false);
             }
         }};
         (ri $op:tt $ri:ident) => {{
@@ -242,6 +249,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 writer.push(lhs);
                 writer.push::<Value>(Value::int(rhs));
                 writer.push(to);
+                registers.set_named(to, false);
             }
         }};
     }
@@ -365,9 +373,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                     addr_placeholder!(lbl_false);
                     addr_placeholder!(lbl_true);
                 } else if registers.named(rhs) {
-                    write![Opcode::BranchLtIR, registers[rhs], lhs];
-                    addr_placeholder!(lbl_true);
+                    write![Opcode::BranchLtRI, lhs, registers[rhs]];
                     addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
                 } else {
                     write![Opcode::BranchLtRR, lhs, rhs];
                     addr_placeholder!(lbl_false);

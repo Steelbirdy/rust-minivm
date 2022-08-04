@@ -232,7 +232,7 @@ fn brancheq_rr<R: Read>(vm: &mut Vm<R>) {
 }
 
 fn brancheq_ir<R: Read>(vm: &mut Vm<R>) {
-    let (lhs, rhs) = (take!(vm, Int), load!(vm));
+    let (lhs, rhs) = (take!(vm, Value), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
 }
@@ -244,13 +244,13 @@ fn branchlt_rr<R: Read>(vm: &mut Vm<R>) {
 }
 
 fn branchlt_ri<R: Read>(vm: &mut Vm<R>) {
-    let (lhs, rhs) = (load!(vm), take!(vm, Int));
+    let (lhs, rhs) = (load!(vm), take!(vm, Value));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
 }
 
 fn branchlt_ir<R: Read>(vm: &mut Vm<R>) {
-    let (lhs, rhs) = (take!(vm, Int), load!(vm));
+    let (lhs, rhs) = (take!(vm, Value), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
 }
