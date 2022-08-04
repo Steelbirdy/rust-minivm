@@ -15,6 +15,12 @@ pub enum TokenKind {
     Addr,
     #[token("arr")]
     Arr,
+    #[token("bb")]
+    BB,
+    #[token("beq")]
+    BEq,
+    #[token("blt")]
+    BLt,
     #[token("call")]
     Call,
     #[token("decr")]
@@ -91,7 +97,7 @@ pub enum TokenKind {
 
     #[regex(r"[ \t]+")]
     Whitespace,
-    #[regex(r"#[^\r\n]*")]
+    #[regex(r"#[^\r\n]*(\r\n|\r|\n)")]
     Comment,
     #[regex(r"(\r\n|\r|\n)+")]
     LineBreak,
@@ -107,6 +113,9 @@ impl TokenKind {
             Add => "`add`",
             Addr => "`addr`",
             Arr => "`arr`",
+            BB => "`bb`",
+            BEq => "`beq`",
+            BLt => "`blt`",
             Call => "`call`",
             Decr => "`decr`",
             Div => "`div`",
@@ -197,6 +206,21 @@ mod tests {
     #[test]
     fn lex_arr() {
         check("arr", expect!["Arr@0..3"]);
+    }
+
+    #[test]
+    fn lex_bb() {
+        check("bb", expect!["BB@0..2"]);
+    }
+
+    #[test]
+    fn lex_beq() {
+        check("beq", expect!["BEq@0..3"]);
+    }
+
+    #[test]
+    fn lex_blt() {
+        check("blt", expect!["BLt@0..3"]);
     }
 
     #[test]

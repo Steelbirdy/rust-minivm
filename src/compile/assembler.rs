@@ -236,7 +236,7 @@ impl ToValue for ast::CharLiteral {
 
     fn to_value(self, asm: &mut Assembler) -> Self::Output {
         let text = self.text(asm.tree);
-        let mut unescaped = unescape_string(text);
+        let mut unescaped = unescape_string(&text[1..text.len() - 1]);
         let char = unescaped.next().unwrap();
         assert!(unescaped.next().is_none());
         u32::from(char).into()
@@ -325,39 +325,21 @@ impl Assemble for ast::Function {
 
 impl Assemble for ast::Instruction {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        match self {
-            Self::Label(inner) => inner.assemble(asm),
-            Self::Add(inner) => inner.assemble(asm),
-            Self::Addr(inner) => inner.assemble(asm),
-            Self::Arr(inner) => inner.assemble(asm),
-            Self::Call(inner) => inner.assemble(asm),
-            Self::Decr(inner) => inner.assemble(asm),
-            Self::Div(inner) => inner.assemble(asm),
-            Self::Exit(inner) => inner.assemble(asm),
-            Self::Get(inner) => inner.assemble(asm),
-            Self::Incr(inner) => inner.assemble(asm),
-            Self::Int(inner) => inner.assemble(asm),
-            Self::Jump(inner) => inner.assemble(asm),
-            Self::JumpEq(inner) => inner.assemble(asm),
-            Self::JumpEz(inner) => inner.assemble(asm),
-            Self::JumpGe(inner) => inner.assemble(asm),
-            Self::JumpGt(inner) => inner.assemble(asm),
-            Self::JumpLe(inner) => inner.assemble(asm),
-            Self::JumpLt(inner) => inner.assemble(asm),
-            Self::JumpNe(inner) => inner.assemble(asm),
-            Self::JumpNz(inner) => inner.assemble(asm),
-            Self::Len(inner) => inner.assemble(asm),
-            Self::Mod(inner) => inner.assemble(asm),
-            Self::Mul(inner) => inner.assemble(asm),
-            Self::Neg(inner) => inner.assemble(asm),
-            Self::Putc(inner) => inner.assemble(asm),
-            Self::Reg(inner) => inner.assemble(asm),
-            Self::Ret(inner) => inner.assemble(asm),
-            Self::Set(inner) => inner.assemble(asm),
-            Self::Str(inner) => inner.assemble(asm),
-            Self::Sub(inner) => inner.assemble(asm),
-            Self::Type(inner) => inner.assemble(asm),
+        macro_rules! delegate {
+            [$($variant:ident),+ $(,)?] => {
+                match self {
+                    $(
+                    Self::$variant(inner) => inner.assemble(asm),
+                    )+
+                }
+            };
         }
+
+        delegate![
+            Label, Add, Addr, Arr, BranchBool, BranchEq, BranchLt, Call, Decr, Div, Exit, Get,
+            Incr, Int, Jump, JumpEq, JumpEz, JumpGe, JumpGt, JumpLe, JumpLt, JumpNe, JumpNz, Len,
+            Mod, Mul, Neg, Putc, Reg, Ret, Set, Str, Sub, Type,
+        ]
     }
 }
 
@@ -480,6 +462,96 @@ impl Assemble for ast::InstrArr {
         });
         asm.push(len);
         asm.push(to);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrBB {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (cond, lbl_false, lbl_true) = args!(self, asm; cond, lbl_false, lbl_true);
+        let reg = match cond {
+            IntOrReg::Int(int) => {
+                asm.push(Bytecode::Jump);
+                asm.push(match int {
+                    0 => lbl_false,
+                    _ => lbl_true,
+                });
+                return Some(());
+            }
+            IntOrReg::Reg(reg) => reg,
+        };
+
+        asm.push(Bytecode::BranchNz);
+        asm.push(reg);
+        asm.push(lbl_false);
+        asm.push(lbl_true);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrBEq {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, lbl_false, lbl_true) = args!(self, asm; lhs, rhs, lbl_false, lbl_true);
+        match (lhs, rhs) {
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                asm.push(Bytecode::Jump);
+                asm.push(if lhs == rhs { lbl_true } else { lbl_false });
+            }
+            (IntOrReg::Int(0), val) | (val, IntOrReg::Int(0)) => {
+                asm.push(Bytecode::BranchNz);
+                asm.push(val);
+                asm.push(lbl_true);
+                asm.push(lbl_false);
+            }
+            (IntOrReg::Int(int), IntOrReg::Reg(reg)) | (IntOrReg::Reg(reg), IntOrReg::Int(int)) => {
+                asm.push(Bytecode::BranchEqIR);
+                asm.push(int);
+                asm.push(reg);
+                asm.push(lbl_false);
+                asm.push(lbl_true);
+            }
+            (IntOrReg::Reg(lhs), IntOrReg::Reg(rhs)) => {
+                asm.push(Bytecode::BranchEqRR);
+                asm.push(lhs);
+                asm.push(rhs);
+                asm.push(lbl_false);
+                asm.push(lbl_true);
+            }
+        }
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrBLt {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (lhs, rhs, lbl_false, lbl_true) = args!(self, asm; lhs, rhs, lbl_false, lbl_true);
+        match (lhs, rhs) {
+            (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
+                asm.push(Bytecode::Jump);
+                asm.push(if lhs < rhs { lbl_true } else { lbl_false });
+            }
+            (IntOrReg::Int(lhs), IntOrReg::Reg(rhs)) => {
+                asm.push(Bytecode::BranchLtIR);
+                asm.push(lhs);
+                asm.push(rhs);
+                asm.push(lbl_false);
+                asm.push(lbl_true);
+            }
+            (IntOrReg::Reg(lhs), IntOrReg::Int(rhs)) => {
+                asm.push(Bytecode::BranchLtRI);
+                asm.push(lhs);
+                asm.push(rhs);
+                asm.push(lbl_false);
+                asm.push(lbl_true);
+            }
+            (IntOrReg::Reg(lhs), IntOrReg::Reg(rhs)) => {
+                asm.push(Bytecode::BranchLtRR);
+                asm.push(lhs);
+                asm.push(rhs);
+                asm.push(lbl_false);
+                asm.push(lbl_true);
+            }
+        }
         Some(())
     }
 }

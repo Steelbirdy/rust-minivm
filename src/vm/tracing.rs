@@ -64,6 +64,16 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
         let op_flags = &mut jumps[code.offset()];
         op_flags.insert(Jump::Instr);
 
+        macro_rules! branch_op {
+            ($($ty:ty),*) => {{
+                op_flags.insert(Jump::Out);
+                skip![$($ty),*];
+                let (addr_f, addr_t) = (code.take::<Addr>().unwrap(), code.take::<Addr>().unwrap());
+                jumps[addr_to_usize(addr_f)].insert(Jump::In);
+                jumps[addr_to_usize(addr_t)].insert(Jump::In);
+            }};
+        }
+
         macro_rules! jump_op {
             ($($ty:ty),*) => {{
                 op_flags.insert(Jump::Out);
@@ -85,6 +95,10 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
                 jumps[code.offset()].insert(Jump::Init);
             }
             Bytecode::Reg => skip![Reg, Reg],
+            Bytecode::BranchNz => branch_op![Reg],
+            Bytecode::BranchEqRR | Bytecode::BranchLtRR => branch_op![Reg, Reg],
+            Bytecode::BranchLtRI => branch_op![Reg, Int],
+            Bytecode::BranchEqIR | Bytecode::BranchLtIR => branch_op![Int, Reg],
             Bytecode::Jump => jump_op![],
             Bytecode::JumpEz | Bytecode::JumpNz => jump_op![Reg],
             Bytecode::JumpLtRR | Bytecode::JumpLeRR | Bytecode::JumpEqRR | Bytecode::JumpNeRR => {
@@ -168,6 +182,20 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
         }};
     }
 
+    macro_rules! branch_op {
+        ($($ty:ty),*) => {{
+            skip![$($ty),*];
+            let (addr_f, addr_t) = (code.take::<Addr>().unwrap(), code.take::<Addr>().unwrap());
+            let (offset_f, offset_t) = (addr_to_usize(addr_f), addr_to_usize(addr_t));
+            code.at_offset(offset_f, || {
+                trace_jumps_reachable(code, jumps);
+            });
+            code.at_offset(offset_t, || {
+                trace_jumps_reachable(code, jumps);
+            });
+        }};
+    }
+
     macro_rules! jump_op {
         ($($ty:ty),*) => {{
             skip![$($ty),*];
@@ -192,6 +220,10 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
             Bytecode::Exit => return,
             Bytecode::Func => skip![Addr, Reg],
             Bytecode::Reg => skip![Reg, Reg],
+            Bytecode::BranchNz => branch_op![Reg],
+            Bytecode::BranchEqRR | Bytecode::BranchLtRR => branch_op![Reg, Reg],
+            Bytecode::BranchLtRI => branch_op![Reg, Int],
+            Bytecode::BranchEqIR | Bytecode::BranchLtIR => branch_op![Int, Reg],
             Bytecode::Jump => jump_op![],
             Bytecode::JumpEz | Bytecode::JumpNz => jump_op![Reg],
             Bytecode::JumpLtRR | Bytecode::JumpLeRR | Bytecode::JumpEqRR | Bytecode::JumpNeRR => {
@@ -304,6 +336,12 @@ fn register_is_used_impl(
     }
 
     macro_rules! return_used_at_addr {
+        (branch) => {{
+            let (addr_f, addr_t) = (code.take::<Addr>().unwrap(), code.take::<Addr>().unwrap());
+            let ret_f = code.at_offset(addr_to_usize(addr_f), || register_is_used(code, jumps, reg, buf, head + 1));
+            let ret_t = code.at_offset(addr_to_usize(addr_t), || register_is_used(code, jumps, reg, buf, head + 1));
+            return ret_f || ret_t;
+        }};
         ($($skip:ty),*) => {{
             skip![$($skip),*];
             let addr = code.take::<Addr>().unwrap();
@@ -330,6 +368,24 @@ fn register_is_used_impl(
             Bytecode::Exit => return false,
             Bytecode::Func | Bytecode::Jump => return_used_at_addr!(),
             Bytecode::Reg | Bytecode::Len | Bytecode::Type => check_reg!(true, false),
+            Bytecode::BranchNz => {
+                check_reg!(true);
+                return_used_at_addr!(branch);
+            }
+            Bytecode::BranchEqRR | Bytecode::BranchLtRR => {
+                check_reg!(true, true);
+                return_used_at_addr!(branch);
+            }
+            Bytecode::BranchLtRI => {
+                check_reg!(true);
+                skip![Int];
+                return_used_at_addr!(branch);
+            }
+            Bytecode::BranchEqIR | Bytecode::BranchLtIR => {
+                skip![Int];
+                check_reg!(true);
+                return_used_at_addr!(branch);
+            }
             Bytecode::JumpEz | Bytecode::JumpNz => {
                 check_reg!(true);
                 return_used_at_addr!();

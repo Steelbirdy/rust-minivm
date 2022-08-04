@@ -33,6 +33,8 @@ impl<'a, R: Read> Vm<'a, R> {
     }
 
     pub fn run(&mut self) -> Value {
+        // return Value::INT_MAX;
+
         const OUT: Reg = 0;
         while !self.code.is_at_end() {
             if self.config.trace_execution {
@@ -50,9 +52,15 @@ impl<'a, R: Read> Vm<'a, R> {
                 Opcode::Func => func(self),
                 Opcode::RegA => reg_a(self),
                 Opcode::RegR => reg_r(self),
+                Opcode::BranchNz => branchnz(self),
+                Opcode::BranchEqRR => brancheq_rr(self),
+                Opcode::BranchEqIR => brancheq_ir(self),
+                Opcode::BranchLtRR => branchlt_rr(self),
+                Opcode::BranchLtRI => branchlt_ri(self),
+                Opcode::BranchLtIR => branchlt_ir(self),
                 Opcode::Jump => jump(self),
-                Opcode::JumpEz => jump_ez(self),
-                Opcode::JumpNz => jump_nz(self),
+                Opcode::JumpEz => jumpez(self),
+                Opcode::JumpNz => jumpnz(self),
                 Opcode::JumpLtRR => jumplt_rr(self),
                 Opcode::JumpLtRI => jumplt_ri(self),
                 Opcode::JumpLtIR => jumplt_ir(self),
@@ -211,12 +219,48 @@ fn reg_r<R: Read>(vm: &mut Vm<R>) {
     *load!(mut vm) = load!(vm);
 }
 
+fn branchnz<R: Read>(vm: &mut Vm<R>) {
+    let cond = load!(vm);
+    let addrs = take!(vm, [Addr; 2]);
+    vm.code.set_offset(addrs[(cond != 0) as usize] as _);
+}
+
+fn brancheq_rr<R: Read>(vm: &mut Vm<R>) {
+    let (lhs, rhs) = (load!(vm), load!(vm));
+    let addrs = take!(vm, [Addr; 2]);
+    vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
+}
+
+fn brancheq_ir<R: Read>(vm: &mut Vm<R>) {
+    let (lhs, rhs) = (take!(vm, Int), load!(vm));
+    let addrs = take!(vm, [Addr; 2]);
+    vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
+}
+
+fn branchlt_rr<R: Read>(vm: &mut Vm<R>) {
+    let (lhs, rhs) = (load!(vm), load!(vm));
+    let addrs = take!(vm, [Addr; 2]);
+    vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
+}
+
+fn branchlt_ri<R: Read>(vm: &mut Vm<R>) {
+    let (lhs, rhs) = (load!(vm), take!(vm, Int));
+    let addrs = take!(vm, [Addr; 2]);
+    vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
+}
+
+fn branchlt_ir<R: Read>(vm: &mut Vm<R>) {
+    let (lhs, rhs) = (take!(vm, Int), load!(vm));
+    let addrs = take!(vm, [Addr; 2]);
+    vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
+}
+
 fn jump<R: Read>(vm: &mut Vm<R>) {
     let addr = take!(vm, Addr);
     vm.code.set_offset(addr as _);
 }
 
-fn jump_ez<R: Read>(vm: &mut Vm<R>) {
+fn jumpez<R: Read>(vm: &mut Vm<R>) {
     if load!(vm) == 0 {
         vm.code.set_offset(take!(vm, Addr) as _);
     } else {
@@ -225,7 +269,7 @@ fn jump_ez<R: Read>(vm: &mut Vm<R>) {
 }
 
 #[allow(clippy::if_not_else)]
-fn jump_nz<R: Read>(vm: &mut Vm<R>) {
+fn jumpnz<R: Read>(vm: &mut Vm<R>) {
     if load!(vm) != 0 {
         vm.code.set_offset(take!(vm, Addr) as _);
     } else {

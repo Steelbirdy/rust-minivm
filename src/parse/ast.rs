@@ -28,6 +28,9 @@ pub enum NodeKind {
     InstrAdd,
     InstrAddr,
     InstrArr,
+    InstrBB,
+    InstrBEq,
+    InstrBLt,
     InstrCall,
     InstrDecr,
     InstrDiv,
@@ -92,6 +95,9 @@ ast_node! { <Cfg> pub Instruction => [
     Add(InstrAdd),
     Addr(InstrAddr),
     Arr(InstrArr),
+    BranchBool(InstrBB),
+    BranchEq(InstrBEq),
+    BranchLt(InstrBLt),
     Call(InstrCall),
     Decr(InstrDecr),
     Div(InstrDiv),
@@ -135,6 +141,23 @@ ast_node! { <Cfg> pub InstrAddr
 ast_node! { <Cfg> pub InstrArr
     fn to = token(Register);
     fn len = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+}
+ast_node! { <Cfg> pub InstrBB
+    fn cond = token(IntOrReg);
+    fn lbl_false = token(Label);
+    fn lbl_true = tokens(Label).nth(1) -> Option<Label>;
+}
+ast_node! { <Cfg> pub InstrBEq
+    fn lhs = token(IntOrReg);
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn lbl_false = token(Label);
+    fn lbl_true = tokens(Label).nth(1) -> Option<Label>;
+}
+ast_node! { <Cfg> pub InstrBLt
+    fn lhs = token(IntOrReg);
+    fn rhs = tokens(IntOrReg).nth(1) -> Option<IntOrReg>;
+    fn lbl_false = token(Label);
+    fn lbl_true = tokens(Label).nth(1) -> Option<Label>;
 }
 ast_node! { <Cfg> pub InstrCall
     fn to = token(Register);

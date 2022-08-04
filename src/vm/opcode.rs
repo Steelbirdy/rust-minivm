@@ -294,6 +294,118 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                     write![Opcode::RegR, from, to];
                 }
             }
+            Bytecode::BranchNz => {
+                let (cond, lbl_false, lbl_true) = take![Reg, Addr, Addr];
+                if registers.named(cond) {
+                    let lbl = if registers[cond] == 0 {
+                        lbl_false
+                    } else {
+                        lbl_true
+                    };
+                    write![Opcode::Jump];
+                    addr_placeholder!(lbl);
+                } else {
+                    write![Opcode::BranchNz, cond];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                }
+            }
+            Bytecode::BranchEqRR => {
+                let (lhs, rhs, lbl_false, lbl_true) = take![Reg, Reg, Addr, Addr];
+                if registers.named(lhs) && registers.named(rhs) {
+                    let lbl = if registers[lhs] == registers[rhs] {
+                        lbl_true
+                    } else {
+                        lbl_false
+                    };
+                    write![Opcode::Jump];
+                    addr_placeholder!(lbl);
+                } else if registers.named(lhs) {
+                    write![Opcode::BranchEqIR, registers[lhs], rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                } else if registers.named(rhs) {
+                    write![Opcode::BranchEqIR, registers[rhs], lhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                } else {
+                    write![Opcode::BranchEqRR, lhs, rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                }
+            }
+            Bytecode::BranchEqIR => {
+                let (lhs, rhs, lbl_false, lbl_true) = take![Int, Reg, Addr, Addr];
+                if registers.named(rhs) {
+                    let lbl = if lhs == registers[rhs] {
+                        lbl_true
+                    } else {
+                        lbl_false
+                    };
+                    write![Opcode::Jump];
+                    addr_placeholder!(lbl);
+                } else {
+                    write![Opcode::BranchEqIR, lhs, rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                }
+            }
+            Bytecode::BranchLtRR => {
+                let (lhs, rhs, lbl_false, lbl_true) = take![Reg, Reg, Addr, Addr];
+                if registers.named(lhs) && registers.named(rhs) {
+                    let lbl = if registers[lhs] < registers[rhs] {
+                        lbl_true
+                    } else {
+                        lbl_false
+                    };
+                    write![Opcode::Jump];
+                    addr_placeholder!(lbl);
+                } else if registers.named(lhs) {
+                    write![Opcode::BranchLtIR, registers[lhs], rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                } else if registers.named(rhs) {
+                    write![Opcode::BranchLtIR, registers[rhs], lhs];
+                    addr_placeholder!(lbl_true);
+                    addr_placeholder!(lbl_false);
+                } else {
+                    write![Opcode::BranchLtRR, lhs, rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                }
+            }
+            Bytecode::BranchLtRI => {
+                let (lhs, rhs, lbl_false, lbl_true) = take![Reg, Int, Addr, Addr];
+                if registers.named(lhs) {
+                    let lbl = if registers[lhs] < rhs {
+                        lbl_true
+                    } else {
+                        lbl_false
+                    };
+                    write![Opcode::Jump];
+                    addr_placeholder!(lbl);
+                } else {
+                    write![Opcode::BranchLtRI, lhs, rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                }
+            }
+            Bytecode::BranchLtIR => {
+                let (lhs, rhs, lbl_false, lbl_true) = take![Int, Reg, Addr, Addr];
+                if registers.named(rhs) {
+                    let lbl = if lhs < registers[rhs] {
+                        lbl_true
+                    } else {
+                        lbl_false
+                    };
+                    write![Opcode::Jump];
+                    addr_placeholder!(lbl);
+                } else {
+                    write![Opcode::BranchLtIR, lhs, rhs];
+                    addr_placeholder!(lbl_false);
+                    addr_placeholder!(lbl_true);
+                }
+            }
             Bytecode::Jump => {
                 let addr = code.take::<Addr>().unwrap();
                 writer.push(Opcode::Jump);
@@ -630,6 +742,18 @@ pub enum Opcode {
     RegA,
     // <op> <from:Reg> <to:Reg>
     RegR,
+    // <op> <cond:Reg> <addr_f:Addr> <addr_t:Addr>
+    BranchNz,
+    // <op> <lhs:Reg> <rhs:Reg> <addr_f:Addr> <addr_t:Addr>
+    BranchEqRR,
+    // <op> <lhs:Int> <rhs:Reg> <addr_f:Addr> <addr_t:Addr>
+    BranchEqIR,
+    // <op> <lhs:Reg> <rhs:Reg> <addr_f:Addr> <addr_t:Addr>
+    BranchLtRR,
+    // <op> <lhs:Int> <rhs:Reg> <addr_f:Addr> <addr_t:Addr>
+    BranchLtRI,
+    // <op> <lhs:Int> <rhs:Reg> <addr_f:Addr> <addr_t:Addr>
+    BranchLtIR,
     // <op> <addr:Addr>
     Jump,
     // <op> <cond:Reg> <addr:Addr>
@@ -820,6 +944,12 @@ impl Opcode {
             Func => "func",
             RegA => "reg_a",
             RegR => "reg_r",
+            BranchNz => "bb",
+            BranchEqRR => "beq_rr",
+            BranchEqIR => "beq_ir",
+            BranchLtRR => "blt_rr",
+            BranchLtRI => "blt_ri",
+            BranchLtIR => "blt_ir",
             Jump => "jump",
             JumpEz => "jumpez",
             JumpNz => "jumpnz",

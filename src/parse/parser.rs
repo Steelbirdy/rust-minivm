@@ -139,6 +139,9 @@ macro_rules! make_instruction_func {
 }
 
 make_instruction_func![
+    BB = [*INT_OR_REG, Label, Label] => InstrBB;
+    BEq = [*INT_OR_REG, *INT_OR_REG, Label, Label] => InstrBEq;
+    BLt = [*INT_OR_REG, *INT_OR_REG, Label, Label] => InstrBLt;
     Decr = [Register] => InstrDecr;
     Exit = [] => InstrExit;
     Incr = [Register] => InstrIncr;

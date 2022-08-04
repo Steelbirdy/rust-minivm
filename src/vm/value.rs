@@ -22,14 +22,8 @@ pub enum ValueKind {
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind() {
-            ValueKind::Int => f
-                .debug_tuple("Int")
-                .field(&self.as_int_unchecked())
-                .finish(),
-            ValueKind::Ptr => f
-                .debug_tuple("Ptr")
-                .field(&self.as_ptr_unchecked())
-                .finish(),
+            ValueKind::Int => write!(f, "{}", self.as_int_unchecked()),
+            ValueKind::Ptr => write!(f, "0x{:0x}", self.as_ptr_unchecked().to_usize()),
         }
     }
 }
