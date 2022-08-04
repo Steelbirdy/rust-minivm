@@ -84,7 +84,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
                 code.skip::<Reg>();
                 jumps[code.offset()].insert(Jump::Init);
             }
-            Bytecode::Copy => skip![Reg, Reg],
+            Bytecode::Reg => skip![Reg, Reg],
             Bytecode::Jump => jump_op![],
             Bytecode::JumpEz | Bytecode::JumpNz => jump_op![Reg],
             Bytecode::JumpLtRR | Bytecode::JumpLeRR | Bytecode::JumpEqRR | Bytecode::JumpNeRR => {
@@ -191,7 +191,7 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
             Bytecode::Missing => return,
             Bytecode::Exit => return,
             Bytecode::Func => skip![Addr, Reg],
-            Bytecode::Copy => skip![Reg, Reg],
+            Bytecode::Reg => skip![Reg, Reg],
             Bytecode::Jump => jump_op![],
             Bytecode::JumpEz | Bytecode::JumpNz => jump_op![Reg],
             Bytecode::JumpLtRR | Bytecode::JumpLeRR | Bytecode::JumpEqRR | Bytecode::JumpNeRR => {
@@ -329,7 +329,7 @@ fn register_is_used_impl(
             Bytecode::Missing => return false,
             Bytecode::Exit => return false,
             Bytecode::Func | Bytecode::Jump => return_used_at_addr!(),
-            Bytecode::Copy | Bytecode::Len | Bytecode::Type => check_reg!(true, false),
+            Bytecode::Reg | Bytecode::Len | Bytecode::Type => check_reg!(true, false),
             Bytecode::JumpEz | Bytecode::JumpNz => {
                 check_reg!(true);
                 return_used_at_addr!();

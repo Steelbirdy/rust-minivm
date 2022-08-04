@@ -45,8 +45,8 @@ pub fn disassemble_instruction<R: Read>(code: &R, buf: &mut String) {
     match opcode {
         Exit => args!(),
         Func => args!(Addr, Reg),
-        CopyA => args!(Addr, Reg),
-        CopyR => args!(Reg, Reg),
+        RegA => args!(Addr, Reg),
+        RegR => args!(Reg, Reg),
         Jump => args!(Addr),
         JumpEz | JumpNz => args!(Reg, Addr),
         JumpLtRR | JumpLeRR | JumpEqRR | JumpNeRR => args!(Reg, Reg, Addr),

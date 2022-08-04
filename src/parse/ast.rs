@@ -29,7 +29,6 @@ pub enum NodeKind {
     InstrAddr,
     InstrArr,
     InstrCall,
-    InstrCopy,
     InstrDecr,
     InstrDiv,
     InstrExit,
@@ -50,6 +49,7 @@ pub enum NodeKind {
     InstrMul,
     InstrNeg,
     InstrPutc,
+    InstrReg,
     InstrRet,
     InstrSet,
     InstrStr,
@@ -93,7 +93,6 @@ ast_node! { <Cfg> pub Instruction => [
     Addr(InstrAddr),
     Arr(InstrArr),
     Call(InstrCall),
-    Copy(InstrCopy),
     Decr(InstrDecr),
     Div(InstrDiv),
     Exit(InstrExit),
@@ -114,6 +113,7 @@ ast_node! { <Cfg> pub Instruction => [
     Mul(InstrMul),
     Neg(InstrNeg),
     Putc(InstrPutc),
+    Reg(InstrReg),
     Ret(InstrRet),
     Set(InstrSet),
     Str(InstrStr),
@@ -152,10 +152,6 @@ impl InstrCall {
             .filter_map(|x| Register::cast(x, tree))
             .skip(skip)
     }
-}
-ast_node! { <Cfg> pub InstrCopy
-    fn to = token(Register);
-    fn from = tokens(Register).nth(1) -> Option<Register>;
 }
 ast_node! { <Cfg> pub InstrDecr
     fn reg = token(Register);
@@ -239,6 +235,10 @@ ast_node! { <Cfg> pub InstrNeg
 }
 ast_node! { <Cfg> pub InstrPutc
     fn char = token(IntOrReg);
+}
+ast_node! { <Cfg> pub InstrReg
+    fn to = token(Register);
+    fn from = tokens(Register).nth(1) -> Option<Register>;
 }
 ast_node! { <Cfg> pub InstrRet
     fn ret = token(IntOrReg);

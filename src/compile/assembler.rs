@@ -331,7 +331,6 @@ impl Assemble for ast::Instruction {
             Self::Addr(inner) => inner.assemble(asm),
             Self::Arr(inner) => inner.assemble(asm),
             Self::Call(inner) => inner.assemble(asm),
-            Self::Copy(inner) => inner.assemble(asm),
             Self::Decr(inner) => inner.assemble(asm),
             Self::Div(inner) => inner.assemble(asm),
             Self::Exit(inner) => inner.assemble(asm),
@@ -352,6 +351,7 @@ impl Assemble for ast::Instruction {
             Self::Mul(inner) => inner.assemble(asm),
             Self::Neg(inner) => inner.assemble(asm),
             Self::Putc(inner) => inner.assemble(asm),
+            Self::Reg(inner) => inner.assemble(asm),
             Self::Ret(inner) => inner.assemble(asm),
             Self::Set(inner) => inner.assemble(asm),
             Self::Str(inner) => inner.assemble(asm),
@@ -431,7 +431,7 @@ impl Assemble for ast::InstrAdd {
                 if reg == to {
                     return Some(());
                 }
-                asm.push(Bytecode::Copy);
+                asm.push(Bytecode::Reg);
                 asm.push(reg);
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(1)) | (IntOrReg::Int(1), IntOrReg::Reg(reg))
@@ -502,16 +502,6 @@ impl Assemble for ast::InstrCall {
     }
 }
 
-impl Assemble for ast::InstrCopy {
-    fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        let (to, from) = args!(self, asm; to, from);
-        asm.push(Bytecode::Copy);
-        asm.push(from);
-        asm.push(to);
-        Some(())
-    }
-}
-
 impl Assemble for ast::InstrDecr {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
         let reg = self.reg(asm.tree)?.to_value(asm);
@@ -543,7 +533,7 @@ impl Assemble for ast::InstrDiv {
                 if reg == to {
                     return Some(());
                 }
-                asm.push(Bytecode::Copy);
+                asm.push(Bytecode::Reg);
                 asm.push(reg);
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(-1)) => {
@@ -876,7 +866,7 @@ impl Assemble for ast::InstrMul {
                 if reg == to {
                     return Some(());
                 }
-                asm.push(Bytecode::Copy);
+                asm.push(Bytecode::Reg);
                 asm.push(reg);
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(-1)) | (IntOrReg::Int(-1), IntOrReg::Reg(reg)) => {
@@ -926,6 +916,16 @@ impl Assemble for ast::InstrPutc {
             IntOrReg::Int(_) => Bytecode::PutcI,
         });
         asm.push(char);
+        Some(())
+    }
+}
+
+impl Assemble for ast::InstrReg {
+    fn assemble(self, asm: &mut Assembler) -> Option<()> {
+        let (to, from) = args!(self, asm; to, from);
+        asm.push(Bytecode::Reg);
+        asm.push(from);
+        asm.push(to);
         Some(())
     }
 }
@@ -989,7 +989,7 @@ impl Assemble for ast::InstrSub {
                 if reg == to {
                     return Some(());
                 }
-                asm.push(Bytecode::Copy);
+                asm.push(Bytecode::Reg);
                 asm.push(reg);
             }
             (IntOrReg::Int(0), IntOrReg::Reg(reg)) => {

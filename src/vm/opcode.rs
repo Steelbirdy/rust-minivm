@@ -284,14 +284,14 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 addr_placeholder!(current_func_end);
                 writer.push(num_regs);
             }
-            Bytecode::Copy => {
+            Bytecode::Reg => {
                 let (from, to) = take![Reg, Reg];
                 if registers.named(from) {
                     registers.set_named(to, true);
                     registers[to] = registers[from];
                 } else {
                     registers.set_named(to, false);
-                    write![Opcode::CopyR, from, to];
+                    write![Opcode::RegR, from, to];
                 }
             }
             Bytecode::Jump => {
@@ -364,7 +364,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
             Bytecode::Addr => {
                 let (addr, to) = take![Addr, Reg];
-                writer.push(Opcode::CopyA);
+                writer.push(Opcode::RegA);
                 addr_placeholder!(addr);
                 writer.push(to);
                 registers.set_named(to, false);
@@ -627,9 +627,9 @@ pub enum Opcode {
     // <op> <end:Addr> <nregs:Reg>
     Func,
     // <op> <addr:Addr> <to:Reg>
-    CopyA,
+    RegA,
     // <op> <from:Reg> <to:Reg>
-    CopyR,
+    RegR,
     // <op> <addr:Addr>
     Jump,
     // <op> <cond:Reg> <addr:Addr>
@@ -818,8 +818,8 @@ impl Opcode {
         match self {
             Exit => "exit",
             Func => "func",
-            CopyA => "copy_a",
-            CopyR => "copy_r",
+            RegA => "reg_a",
+            RegR => "reg_r",
             Jump => "jump",
             JumpEz => "jumpez",
             JumpNz => "jumpnz",

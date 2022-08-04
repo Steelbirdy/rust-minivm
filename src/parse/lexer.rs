@@ -17,8 +17,6 @@ pub enum TokenKind {
     Arr,
     #[token("call")]
     Call,
-    #[token("copy")]
-    Copy,
     #[token("decr")]
     Decr,
     #[token("div")]
@@ -61,8 +59,10 @@ pub enum TokenKind {
     Mul,
     #[token("neg")]
     Neg,
-    #[token("putc")]
+    #[token("putchar")]
     Putc,
+    #[token("reg")]
+    Reg,
     #[token("ret")]
     Ret,
     #[token("set")]
@@ -108,7 +108,6 @@ impl TokenKind {
             Addr => "`addr`",
             Arr => "`arr`",
             Call => "`call`",
-            Copy => "`copy`",
             Decr => "`decr`",
             Div => "`div`",
             End => "`end`",
@@ -130,7 +129,8 @@ impl TokenKind {
             Mod => "`mod`",
             Mul => "`mul`",
             Neg => "`neg`",
-            Putc => "`putc`",
+            Putc => "`putchar`",
+            Reg => "`reg`",
             Ret => "`ret`",
             Set => "`set`",
             Str => "`str`",
@@ -202,11 +202,6 @@ mod tests {
     #[test]
     fn lex_call() {
         check("call", expect!["Call@0..4"]);
-    }
-
-    #[test]
-    fn lex_copy() {
-        check("copy", expect!["Copy@0..4"]);
     }
 
     #[test]
@@ -315,8 +310,13 @@ mod tests {
     }
 
     #[test]
-    fn lex_putc() {
-        check("putc", expect!["Putc@0..4"]);
+    fn lex_putchar() {
+        check("putchar", expect!["Putchar@0..4"]);
+    }
+
+    #[test]
+    fn lex_reg() {
+        check("reg", expect!["Reg@0..4"]);
     }
 
     #[test]

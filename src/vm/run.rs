@@ -48,8 +48,8 @@ impl<'a, R: Read> Vm<'a, R> {
             match opcode {
                 Opcode::Exit => break,
                 Opcode::Func => func(self),
-                Opcode::CopyA => copy_a(self),
-                Opcode::CopyR => copy_r(self),
+                Opcode::RegA => reg_a(self),
+                Opcode::RegR => reg_r(self),
                 Opcode::Jump => jump(self),
                 Opcode::JumpEz => jump_ez(self),
                 Opcode::JumpNz => jump_nz(self),
@@ -202,12 +202,12 @@ fn func<R: Read>(vm: &mut Vm<R>) {
     jump(vm);
 }
 
-fn copy_a<R: Read>(vm: &mut Vm<R>) {
+fn reg_a<R: Read>(vm: &mut Vm<R>) {
     let addr = take!(vm, Addr);
     *load!(mut vm) = Value::int_unchecked(addr.into());
 }
 
-fn copy_r<R: Read>(vm: &mut Vm<R>) {
+fn reg_r<R: Read>(vm: &mut Vm<R>) {
     *load!(mut vm) = load!(vm);
 }
 

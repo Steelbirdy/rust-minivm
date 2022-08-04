@@ -47,7 +47,7 @@ pub fn disassemble(code: ByteReader) -> String {
             Missing => args!(),
             Exit => args!(),
             Func => args!(Addr, Reg),
-            Copy => args!(Reg, Reg),
+            Reg => args!(Reg, Reg),
             Jump => args!(Addr),
             JumpEz | JumpNz => args!(Reg, Addr),
             JumpLtRR | JumpLeRR | JumpEqRR | JumpNeRR => args!(Reg, Reg, Addr),

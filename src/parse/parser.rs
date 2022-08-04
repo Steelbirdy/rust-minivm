@@ -160,7 +160,6 @@ make_instruction_func![@reg
     Add = [*INT_OR_REG, *INT_OR_REG] => InstrAdd;
     Addr = [Label] => InstrAddr;
     Arr = [*INT_OR_REG] => InstrArr;
-    Copy = [Register] => InstrCopy;
     Div = [*INT_OR_REG, *INT_OR_REG] => InstrDiv;
     Get = [Register, *INT_OR_REG] => InstrGet;
     Int = [*CHAR_OR_INT] => InstrInt;
@@ -168,6 +167,7 @@ make_instruction_func![@reg
     Mod = [*INT_OR_REG, *INT_OR_REG] => InstrMod;
     Mul = [*INT_OR_REG, *INT_OR_REG] => InstrMul;
     Neg = [*INT_OR_REG] => InstrNeg;
+    Reg = [Register] => InstrReg;
     Str = [StringLiteral] => InstrStr;
     Sub = [*INT_OR_REG, *INT_OR_REG] => InstrSub;
     Type = [Register] => InstrType;
