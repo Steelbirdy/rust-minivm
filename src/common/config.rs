@@ -15,12 +15,12 @@ pub struct Process<'a> {
     pub source: &'a str,
     file_id: FileId,
     files: Files<'a>,
-    pub config: RunConfig,
+    pub config: &'a RunConfig,
 }
 
 impl<'a> Process<'a> {
     #[must_use]
-    pub fn new(source: &'a str, file_name: &'a str, config: RunConfig) -> Self {
+    pub fn new(source: &'a str, file_name: &'a str, config: &'a RunConfig) -> Self {
         let mut files = Files::new();
         let file_id = files.add(file_name, source);
         Self {

@@ -2,6 +2,7 @@ use clap::Parser;
 use codespan_reporting::term::termcolor::ColorChoice;
 use rust_minivm::{
     config::{Diagnostic, Process, RunConfig},
+    RuntimeError,
     Value,
 };
 
@@ -13,56 +14,68 @@ struct Cli {
     debug: bool,
 }
 
-fn run<'a>(
-    source: &'a str,
-    file_name: &'a str,
-    config: RunConfig,
-) -> (Process<'a>, Result<Value, Vec<Diagnostic>>) {
-    let process = Process::new(source, file_name, config);
-    let ret = rust_minivm::run(&process);
-    (process, ret)
+#[derive(Debug)]
+enum Error {
+    Diagnostics(Vec<Diagnostic>),
+    RuntimeError(RuntimeError),
 }
 
-// fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
-//     let mut stdin = std::io::stdin().lines();
-//     loop {
-//         let mut buf = String::new();
-//
-//         print!(">>> ");
-//         std::io::stdout().flush()?;
-//         while let Some(Ok(line)) = stdin.next() {
-//             if line.is_empty() {
-//                 break;
-//             }
-//             buf.push_str(&line);
-//             buf.push('\n');
-//             print!("... ");
-//             std::io::stdout().flush()?;
-//         }
-//
-//         if buf.is_empty() {
-//             return Ok(());
-//         }
-//         run(&buf);
-//     }
-// }
+impl From<Vec<Diagnostic>> for Error {
+    fn from(diagnostics: Vec<Diagnostic>) -> Self {
+        Error::Diagnostics(diagnostics)
+    }
+}
 
-type RunOutput = (Process<'static>, Result<Value, Vec<Diagnostic>>);
+impl From<RuntimeError> for Error {
+    fn from(err: RuntimeError) -> Self {
+        Error::RuntimeError(err)
+    }
+}
 
-fn run_from_file(path: &str, config: RunConfig) -> Result<RunOutput, Box<dyn std::error::Error>> {
+fn run<'a>(process: &Process) -> Result<Value, Error> {
+    let (bytecode, gc) = rust_minivm::compile(process)?;
+    let ret = rust_minivm::run(bytecode.reader(), gc, process)?;
+    Ok(ret)
+}
+
+fn run_from_file(path: &str, config: &RunConfig) {
     let path = std::path::Path::new(path);
-    let contents = std::fs::read_to_string(path)?;
-    let contents = Box::leak(contents.into_boxed_str());
-    let file_name = {
-        let tmp = path.file_name().unwrap();
-        let tmp = tmp.to_str().unwrap();
-        let tmp = tmp.to_string().into_boxed_str();
-        Box::leak(tmp)
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(err) => return eprintln!("{err}"),
     };
-    Ok(run(contents, file_name, config))
+    let file_name = {
+        let os_str = path.file_name().unwrap();
+        os_str.to_str().unwrap()
+    };
+    let process = Process::new(&contents, file_name, config);
+    let _ = match run(&process) {
+        Ok(value) => value,
+        Err(Error::Diagnostics(diagnostics)) => return display_diagnostics(diagnostics, &process),
+        Err(Error::RuntimeError(err)) => return display_runtime_error(err, &process),
+    };
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn display_diagnostics(diagnostics: Vec<Diagnostic>, process: &Process) {
+    let writer =
+        codespan_reporting::term::termcolor::StandardStream::stderr(ColorChoice::Always);
+    let config = codespan_reporting::term::Config::default();
+
+    for diagnostic in diagnostics {
+        codespan_reporting::term::emit(
+            &mut writer.lock(),
+            &config,
+            process.files(),
+            &diagnostic,
+        ).unwrap();
+    }
+}
+
+fn display_runtime_error(err: RuntimeError, process: &Process) {
+    todo!()
+}
+
+fn main() {
     let args: Cli = Parser::parse();
     let run_config = RunConfig {
         dump_bytecode: args.debug,
@@ -71,27 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_output: args.debug,
     };
 
-    let (process, out) = if let Some(path) = &args.file_path {
-        run_from_file(path, run_config)?
+    if let Some(path) = &args.file_path {
+        run_from_file(path, &run_config)
     } else {
-        // run_repl(run_config)
         todo!("REPL")
-    };
-
-    if let Err(diagnostics) = out {
-        let writer =
-            codespan_reporting::term::termcolor::StandardStream::stderr(ColorChoice::Always);
-        let config = codespan_reporting::term::Config::default();
-
-        for diagnostic in diagnostics {
-            codespan_reporting::term::emit(
-                &mut writer.lock(),
-                &config,
-                process.files(),
-                &diagnostic,
-            )?;
-        }
     }
-
-    Ok(())
 }
