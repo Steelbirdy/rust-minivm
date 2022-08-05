@@ -12,7 +12,7 @@ mod parse;
 mod vm;
 
 pub use common::config::Diagnostic;
-pub use common::{config, ByteReader, Interner, Read};
+pub use common::{config, BytecodeReader, Interner};
 pub use compile::{assemble, disassemble as disassemble_bytecode};
 pub use parse::{lex, parse, validate};
 pub use vm::{disassemble as disassemble_opcode, lower_bytecode, trace_jumps, Gc, Value, Vm};
@@ -41,28 +41,28 @@ pub fn run(process: &config::Process) -> Result<Value, Vec<Diagnostic>> {
 
     // Assembly (AST -> bytecode)
     let bytecode = assemble(parse_result.syntax_tree(), &mut interner);
+    let reader = BytecodeReader::new(&bytecode);
     if process.config.dump_bytecode {
         println!("=== BYTECODE ===");
-        println!("{}", disassemble_bytecode(bytecode.as_ref()));
+        println!("{}", disassemble_bytecode(reader));
         println!("================\n");
     }
-    let jumps = trace_jumps(bytecode.as_ref());
+    let jumps = trace_jumps(reader);
 
     // Lowering (bytecode -> internal bytecode)
-    let opcode = common::OwnedByteBuffer::new(lower_bytecode(bytecode.as_ref(), &jumps, &mut gc));
+    let opcode = lower_bytecode(reader, &jumps, &mut gc);
+    let reader = BytecodeReader::new(&opcode);
     if process.config.dump_internal_bytecode {
         println!("=== INTERNAL BYTECODE ===");
-        println!("{}", disassemble_opcode(opcode.as_ref()));
+        println!("{}", disassemble_opcode(reader));
         println!("=========================\n");
     }
 
     // Run the VM
-    if process.config.trace_execution {
-        println!("=== EXECUTION ===");
-    }
-    let ret = Vm::new(opcode, gc, &process.config).run();
-    if process.config.trace_execution {
-        println!("===           ===");
-    }
+    #[cfg(feature = "trace-execution")]
+    println!("=== EXECUTION ===");
+    let ret = Vm::new(reader, gc, &process.config).run();
+    #[cfg(feature = "trace-execution")]
+    println!("===           ===");
     Ok(ret)
 }

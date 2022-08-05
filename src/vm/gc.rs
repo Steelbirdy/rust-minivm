@@ -1,11 +1,7 @@
-use crate::{
-    common::{config::NUM_REGISTERS, Reg},
-    vm::{
-        value::{Value, ValueKind},
-        Len,
-    },
+use crate::vm::{
+    value::{Value, ValueKind},
+    Len,
 };
-use std::ops::{Index, IndexMut};
 
 const GC_MIN_THRESHOLD: usize = 1 << 12;
 
@@ -108,8 +104,6 @@ pub struct Gc {
     buf: Vec<GcData>,
     buf_used: usize,
     move_buf: Vec<usize>,
-    registers: Vec<Value>,
-    frame_start: usize,
     cur_alloc: usize,
     max_alloc: usize,
 }
@@ -118,14 +112,6 @@ impl Gc {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn push_frame(&mut self, num_regs: Reg) {
-        self.frame_start += num_regs as usize;
-    }
-
-    pub fn pop_frame(&mut self, num_regs: Reg) {
-        self.frame_start -= num_regs as usize;
     }
 
     #[must_use]
@@ -178,7 +164,7 @@ impl Gc {
         #[cfg(feature = "check_bounds")]
         self.check_bounds(ptr, idx);
 
-        self.buf[ptr.0 + idx].value_mut()
+        self.buf[ptr.0 + idx + 1].value_mut()
     }
 
     #[must_use]
@@ -186,7 +172,7 @@ impl Gc {
         self.cur_alloc >= self.max_alloc
     }
 
-    pub fn run(&mut self) {
+    pub fn run<const N: usize>(&mut self, registers: &mut [Value; N]) {
         macro_rules! move_array {
             (|$i:ident| $get:expr) => {{
                 if $get.is_ptr() {
@@ -208,8 +194,8 @@ impl Gc {
             return;
         }
 
-        for i in 0..self.registers.len() {
-            self.mark(self.registers[i]);
+        for &mut reg in &mut *registers {
+            self.mark(reg)
         }
 
         if self.buf_used > self.move_buf.len() {
@@ -241,8 +227,8 @@ impl Gc {
             }
         }
 
-        for i in 0..self.registers.len() {
-            move_array!(|i| self.registers[i]);
+        for reg in registers {
+            move_array!(|i| *reg);
         }
 
         let mut i = 0;
@@ -284,28 +270,8 @@ impl Default for Gc {
             buf: Vec::new(),
             buf_used: 0,
             move_buf: Vec::new(),
-            registers: vec![Value::int_unchecked(0); NUM_REGISTERS],
-            frame_start: 0,
             cur_alloc: 0,
             max_alloc: GC_MIN_THRESHOLD,
         }
-    }
-}
-
-impl Index<Reg> for Gc {
-    type Output = Value;
-
-    #[inline]
-    fn index(&self, reg: Reg) -> &Self::Output {
-        let index: usize = reg.into();
-        &self.registers[self.frame_start + index]
-    }
-}
-
-impl IndexMut<Reg> for Gc {
-    #[inline]
-    fn index_mut(&mut self, reg: Reg) -> &mut Self::Output {
-        let index: usize = reg.into();
-        &mut self.registers[self.frame_start + index]
     }
 }

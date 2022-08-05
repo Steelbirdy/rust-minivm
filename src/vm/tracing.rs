@@ -1,5 +1,5 @@
 use crate::{
-    common::{Addr, ByteReader, Int, Read, Reg},
+    common::{Addr, BytecodeReader, Int, Reg},
     compile::Bytecode,
 };
 
@@ -29,16 +29,15 @@ impl JumpSet {
     }
 }
 
-pub fn trace_jumps(code: ByteReader) -> Box<[JumpSet]> {
+pub fn trace_jumps(mut code: BytecodeReader) -> Box<[JumpSet]> {
     let mut ret = Vec::with_capacity(code.len() + 1);
     ret.resize(ret.capacity(), JumpSet::EMPTY);
     let mut ret = ret.into_boxed_slice();
 
-    code.at_start(|| {
-        trace_jumps_base(&code, &mut ret);
-        code.reset();
-        trace_jumps_reachable(&code, &mut ret);
-    });
+    code.set_offset(0);
+    trace_jumps_base(&mut code, &mut ret);
+    code.set_offset(0);
+    trace_jumps_reachable(&mut code, &mut ret);
     ret
 }
 
@@ -53,7 +52,7 @@ fn addr_to_usize(addr: Addr) -> usize {
 }
 
 // TODO: Merge `trace_jumps_base` and `trace_jumps_reachable` into one function
-fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
+fn trace_jumps_base(code: &mut BytecodeReader, jumps: &mut [JumpSet]) {
     macro_rules! skip {
         [$($ty:ty),*] => {{
             $(code.skip::<$ty>();)*
@@ -68,7 +67,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             ($($ty:ty),*) => {{
                 op_flags.insert(Jump::Out);
                 skip![$($ty),*];
-                let (addr_f, addr_t) = (code.take::<Addr>().unwrap(), code.take::<Addr>().unwrap());
+                let (addr_f, addr_t) = (code.take::<Addr>(), code.take::<Addr>());
                 jumps[addr_to_usize(addr_f)].insert(Jump::In);
                 jumps[addr_to_usize(addr_t)].insert(Jump::In);
             }};
@@ -78,12 +77,12 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             ($($ty:ty),*) => {{
                 op_flags.insert(Jump::Out);
                 skip![$($ty),*];
-                let addr = code.take::<Addr>().unwrap();
+                let addr = code.take::<Addr>();
                 jumps[addr_to_usize(addr)].insert(Jump::In);
             }};
         }
 
-        let opcode = code.take::<Bytecode>().unwrap();
+        let opcode = code.take::<Bytecode>();
         match opcode {
             Bytecode::Missing => {}
             Bytecode::Exit => {
@@ -112,7 +111,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             | Bytecode::JumpNeIR => jump_op![Int, Reg],
             Bytecode::Call => {
                 code.skip::<Addr>();
-                let num_args = code.take::<Int>().unwrap();
+                let num_args = code.take::<Int>();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
                 code.skip::<Reg>();
             }
@@ -123,7 +122,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             }
             Bytecode::DCall => {
                 code.skip::<Reg>();
-                let num_args = code.take::<Int>().unwrap();
+                let num_args = code.take::<Int>();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
                 code.skip::<Reg>();
             }
@@ -137,7 +136,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
             }
             Bytecode::Int => skip![Int, Reg],
             Bytecode::Str => {
-                let num_chars = code.take::<Int>().unwrap();
+                let num_chars = code.take::<Int>();
                 code.skipn::<Int>(num_chars.try_into().unwrap());
                 code.skip::<Reg>();
             }
@@ -175,7 +174,7 @@ fn trace_jumps_base(code: &ByteReader, jumps: &mut [JumpSet]) {
     }
 }
 
-fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
+fn trace_jumps_reachable(code: &mut BytecodeReader, jumps: &mut [JumpSet]) {
     macro_rules! skip {
         [$($ty:ty),*] => {{
             $(code.skip::<$ty>();)*
@@ -185,12 +184,12 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
     macro_rules! branch_op {
         ($($ty:ty),*) => {{
             skip![$($ty),*];
-            let (addr_f, addr_t) = (code.take::<Addr>().unwrap(), code.take::<Addr>().unwrap());
+            let (addr_f, addr_t) = (code.take::<Addr>(), code.take::<Addr>());
             let (offset_f, offset_t) = (addr_to_usize(addr_f), addr_to_usize(addr_t));
-            code.at_offset(offset_f, || {
+            code.at_offset(offset_f, |code| {
                 trace_jumps_reachable(code, jumps);
             });
-            code.at_offset(offset_t, || {
+            code.at_offset(offset_t, |code| {
                 trace_jumps_reachable(code, jumps);
             });
         }};
@@ -199,11 +198,9 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
     macro_rules! jump_op {
         ($($ty:ty),*) => {{
             skip![$($ty),*];
-            let addr = code.take::<Addr>().unwrap();
+            let addr = code.take::<Addr>();
             let offset = addr_to_usize(addr);
-            code.at_offset(offset, || {
-                trace_jumps_reachable(code, jumps);
-            });
+            code.at_offset(offset, |code| trace_jumps_reachable(code, jumps));
         }};
     }
 
@@ -213,7 +210,7 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
     while !code.is_at_end() {
         let op_jumps = &mut jumps[code.offset()];
         op_jumps.insert(Jump::Reach);
-        let opcode = code.take::<Bytecode>().unwrap();
+        let opcode = code.take::<Bytecode>();
         match opcode {
             // Can't make any assumptions about missing code
             Bytecode::Missing => return,
@@ -236,26 +233,26 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
             | Bytecode::JumpEqIR
             | Bytecode::JumpNeIR => jump_op![Int, Reg],
             Bytecode::Call => {
-                let addr = code.take::<Addr>().unwrap();
+                let addr = code.take::<Addr>();
                 let offset = addr_to_usize(addr);
-                let num_args = code.take::<Int>().unwrap();
+                let num_args = code.take::<Int>();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
-                code.at_offset(offset, || {
+                code.at_offset(offset, |code| {
                     trace_jumps_reachable(code, jumps);
                 });
             }
             Bytecode::Addr => {
-                let addr = code.take::<Addr>().unwrap();
+                let addr = code.take::<Addr>();
                 let offset = addr_to_usize(addr);
                 code.skip::<Reg>();
-                code.at_offset(offset, || {
+                code.at_offset(offset, |code| {
                     trace_jumps_reachable(code, jumps);
                 });
             }
             Bytecode::DJump => skip![Reg],
             Bytecode::DCall => {
                 code.skip::<Reg>();
-                let num_args = code.take::<Int>().unwrap();
+                let num_args = code.take::<Int>();
                 code.skipn::<Reg>(num_args.try_into().unwrap());
                 code.skip::<Reg>();
             }
@@ -263,7 +260,7 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
             Bytecode::RetI => skip![Int],
             Bytecode::Int => skip![Int, Reg],
             Bytecode::Str => {
-                let num_chars = code.take::<Int>().unwrap();
+                let num_chars = code.take::<Int>();
                 code.skipn::<Int>(num_chars.try_into().unwrap());
                 code.skip::<Reg>();
             }
@@ -302,17 +299,17 @@ fn trace_jumps_reachable(code: &ByteReader, jumps: &mut [JumpSet]) {
 }
 
 pub fn register_is_used(
-    code: &ByteReader,
+    code: &mut BytecodeReader,
     jumps: &[JumpSet],
     reg: Reg,
     buf: &mut [usize],
     head: usize,
 ) -> bool {
-    code.at_checkpoint(|| register_is_used_impl(code, jumps, reg, buf, head))
+    code.at_checkpoint(|code| register_is_used_impl(code, jumps, reg, buf, head))
 }
 
 fn register_is_used_impl(
-    code: &ByteReader,
+    code: &mut BytecodeReader,
     jumps: &[JumpSet],
     reg: Reg,
     buf: &mut [usize],
@@ -327,7 +324,7 @@ fn register_is_used_impl(
     macro_rules! check_reg {
         ($($ret:literal),+) => {{
             $(
-            let my_reg = code.take::<Reg>().unwrap();
+            let my_reg = code.take::<Reg>();
             if my_reg == reg {
                 return $ret;
             }
@@ -337,14 +334,14 @@ fn register_is_used_impl(
 
     macro_rules! return_used_at_addr {
         (branch) => {{
-            let (addr_f, addr_t) = (code.take::<Addr>().unwrap(), code.take::<Addr>().unwrap());
-            let ret_f = code.at_offset(addr_to_usize(addr_f), || register_is_used(code, jumps, reg, buf, head + 1));
-            let ret_t = code.at_offset(addr_to_usize(addr_t), || register_is_used(code, jumps, reg, buf, head + 1));
+            let (addr_f, addr_t) = (code.take::<Addr>(), code.take::<Addr>());
+            let ret_f = code.at_offset(addr_to_usize(addr_f), |code| register_is_used(code, jumps, reg, buf, head + 1));
+            let ret_t = code.at_offset(addr_to_usize(addr_t), |code| register_is_used(code, jumps, reg, buf, head + 1));
             return ret_f || ret_t;
         }};
         ($($skip:ty),*) => {{
             skip![$($skip),*];
-            let addr = code.take::<Addr>().unwrap();
+            let addr = code.take::<Addr>();
             code.set_offset(addr_to_usize(addr));
             return register_is_used(code, jumps, reg, buf, head + 1);
         }};
@@ -360,7 +357,7 @@ fn register_is_used_impl(
     buf[head] = offset;
 
     while !code.is_at_end() {
-        let opcode = code.take::<Bytecode>().unwrap();
+        let opcode = code.take::<Bytecode>();
         let start = code.offset();
         match opcode {
             // Can't make any assumptions about missing code
@@ -405,7 +402,7 @@ fn register_is_used_impl(
             }
             Bytecode::Call => {
                 skip![Addr];
-                let num_args = code.take::<Int>().unwrap();
+                let num_args = code.take::<Int>();
                 for _ in 0..num_args {
                     check_reg!(true);
                 }
@@ -415,13 +412,13 @@ fn register_is_used_impl(
             Bytecode::DJump => check_reg!(true),
             Bytecode::DCall => {
                 check_reg!(true);
-                let num_args = code.take::<Int>().unwrap();
+                let num_args = code.take::<Int>();
                 for _ in 0..num_args {
                     check_reg!(true);
                 }
                 check_reg!(false);
             }
-            Bytecode::RetR => return code.take::<Reg>().unwrap() == reg,
+            Bytecode::RetR => return code.take::<Reg>() == reg,
             Bytecode::RetI => return false,
             Bytecode::Int => {
                 skip![Int];
@@ -477,7 +474,7 @@ fn register_is_used_impl(
 
         code.set_offset(start);
         while !code.is_at_end() && !jumps[code.offset()].contains(Jump::Instr) {
-            code.advance(1);
+            code.skip::<u8>();
         }
     }
 

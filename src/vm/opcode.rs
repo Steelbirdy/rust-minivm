@@ -1,7 +1,5 @@
 use crate::{
-    common::{
-        config, Addr, ByteReader, ByteWriter, FromBytes, Int, Push, Read, Reg, ToBytes, Write,
-    },
+    common::{config, Addr, AsBytes, BytecodeBuilder, BytecodeReader, Int, Reg},
     compile::Bytecode,
     vm::{self, Gc, Jump, JumpSet, Value},
 };
@@ -46,8 +44,8 @@ impl IndexMut<Reg> for Registers {
     }
 }
 
-pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[u8]> {
-    let mut writer = ByteWriter::default();
+pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[u8]> {
+    let mut writer = BytecodeBuilder::default();
     let mut locs = FxHashMap::default();
     let mut froms = FxHashMap::default();
 
@@ -59,7 +57,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
 
     macro_rules! take {
         ($($ty:ty),+ $(,)?) => {
-            ($(code.take::<$ty>().unwrap()),+)
+            ($(code.take::<$ty>()),+)
         };
     }
 
@@ -78,9 +76,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
 
     macro_rules! binary_jump_op {
         (rr $op:tt $rr:ident $ir:ident) => {{
-            let lhs = code.take::<Reg>().unwrap();
-            let rhs = code.take::<Reg>().unwrap();
-            let addr = code.take::<Addr>().unwrap();
+            let lhs = code.take::<Reg>();
+            let rhs = code.take::<Reg>();
+            let addr = code.take::<Addr>();
             if registers.named(lhs) && registers.named(rhs) {
                 if registers[lhs] $op registers[rhs] {
                     writer.push(Opcode::Jump);
@@ -104,9 +102,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
         }};
         (rr $op:tt $rr:ident $ir:ident $ri:ident) => {{
-            let lhs = code.take::<Reg>().unwrap();
-            let rhs = code.take::<Reg>().unwrap();
-            let addr = code.take::<Addr>().unwrap();
+            let lhs = code.take::<Reg>();
+            let rhs = code.take::<Reg>();
+            let addr = code.take::<Addr>();
             if registers.named(lhs) && registers.named(rhs) {
                 if registers[lhs] $op registers[rhs] {
                     writer.push(Opcode::Jump);
@@ -130,9 +128,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
         }};
         (ir $op:tt $ir:ident) => {{
-            let lhs = code.take::<Int>().unwrap();
-            let rhs = code.take::<Reg>().unwrap();
-            let addr = code.take::<Addr>().unwrap();
+            let lhs = code.take::<Int>();
+            let rhs = code.take::<Reg>();
+            let addr = code.take::<Addr>();
             if registers.named(rhs) {
                 if lhs $op registers[rhs] {
                     writer.push(Opcode::Jump);
@@ -146,9 +144,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
         }};
         (ri $op:tt $ri:ident) => {{
-            let lhs = code.take::<Reg>().unwrap();
-            let rhs = code.take::<Int>().unwrap();
-            let addr = code.take::<Addr>().unwrap();
+            let lhs = code.take::<Reg>();
+            let rhs = code.take::<Int>();
+            let addr = code.take::<Addr>();
             if registers.named(lhs) {
                 if registers[lhs] $op rhs {
                     writer.push(Opcode::Jump);
@@ -165,9 +163,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
 
     macro_rules! binary_op {
         (rr $op:tt $rr:ident $ir:ident) => {{
-            let lhs = code.take::<Reg>().unwrap();
-            let rhs = code.take::<Reg>().unwrap();
-            let to = code.take::<Reg>().unwrap();
+            let lhs = code.take::<Reg>();
+            let rhs = code.take::<Reg>();
+            let to = code.take::<Reg>();
             if registers.named(lhs) && registers.named(rhs) {
                 registers.set_named(to, true);
                 registers[to] = registers[lhs] $op registers[rhs];
@@ -194,9 +192,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
         }};
         (rr $op:tt $rr:ident $ir:ident $ri:ident) => {{
-            let lhs = code.take::<Reg>().unwrap();
-            let rhs = code.take::<Reg>().unwrap();
-            let to = code.take::<Reg>().unwrap();
+            let lhs = code.take::<Reg>();
+            let rhs = code.take::<Reg>();
+            let to = code.take::<Reg>();
             if registers.named(lhs) && registers.named(rhs) {
                 registers.set_named(to, true);
                 registers[to] = registers[lhs] $op registers[rhs];
@@ -223,9 +221,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
         }};
         (ir $op:tt $ir:ident) => {{
-            let lhs = code.take::<Int>().unwrap();
-            let rhs = code.take::<Reg>().unwrap();
-            let to = code.take::<Reg>().unwrap();
+            let lhs = code.take::<Int>();
+            let rhs = code.take::<Reg>();
+            let to = code.take::<Reg>();
             if registers.named(rhs) {
                 registers.set_named(to, true);
                 registers[to] = lhs $op registers[rhs];
@@ -238,9 +236,9 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             }
         }};
         (ri $op:tt $ri:ident) => {{
-            let lhs = code.take::<Reg>().unwrap();
-            let rhs = code.take::<Int>().unwrap();
-            let to = code.take::<Reg>().unwrap();
+            let lhs = code.take::<Reg>();
+            let rhs = code.take::<Int>();
+            let to = code.take::<Reg>();
             if registers.named(lhs) {
                 registers.set_named(to, true);
                 registers[to] = registers[lhs] $op rhs;
@@ -260,7 +258,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             for i in 0..num_regs {
                 if registers.named(i) {
                     let mut tmp = [0; 256];
-                    if vm::register_is_used(&code, jumps, i, &mut tmp, 0) {
+                    if vm::register_is_used(&mut code, jumps, i, &mut tmp, 0) {
                         writer.push(Opcode::Value);
                         writer.push(registers[i]);
                         writer.push(i);
@@ -275,7 +273,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
         }
 
         locs.insert(start, writer.len());
-        let opcode = code.take::<Bytecode>().unwrap();
+        let opcode = code.take::<Bytecode>();
         match opcode {
             Bytecode::Missing => panic!("incomplete bytecode: missing value"),
             Bytecode::Exit => {
@@ -285,8 +283,8 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 for i in 0..num_regs {
                     registers.set_named(i, false);
                 }
-                let current_func_end = code.take::<Addr>().unwrap();
-                num_regs = code.take::<Reg>().unwrap();
+                let current_func_end = code.take::<Addr>();
+                num_regs = code.take::<Reg>();
                 registers.grow(num_regs);
                 writer.push(Opcode::Func);
                 addr_placeholder!(current_func_end);
@@ -415,7 +413,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 }
             }
             Bytecode::Jump => {
-                let addr = code.take::<Addr>().unwrap();
+                let addr = code.take::<Addr>();
                 writer.push(Opcode::Jump);
                 addr_placeholder!(addr);
             }
@@ -454,29 +452,25 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
             Bytecode::JumpNeRR => binary_jump_op!(rr != JumpNeRR JumpNeIR),
             Bytecode::JumpNeIR => binary_jump_op!(ir != JumpNeIR),
             Bytecode::Call => {
-                let addr = code.take::<Addr>().unwrap();
+                let addr = code.take::<Addr>();
                 let num_args = {
-                    let n = code.take::<Int>().unwrap();
+                    let n = code.take::<Int>();
                     usize::try_from(n).unwrap()
                 };
                 let args_start = code.offset();
                 for i in 0..num_args {
-                    let arg = code
-                        .read_at::<Reg>(args_start + i * std::mem::size_of::<Reg>())
-                        .unwrap();
+                    let arg = code.read_at::<Reg>(args_start + i * std::mem::size_of::<Reg>());
                     if registers.named(arg) {
                         write![Opcode::Value, registers[arg], arg];
                     }
                 }
-                let ret = code
-                    .read_at::<Reg>(args_start + num_args * std::mem::size_of::<Reg>())
-                    .unwrap();
+                let ret = code.read_at::<Reg>(args_start + num_args * std::mem::size_of::<Reg>());
                 registers.set_named(ret, false);
                 let opcode = Opcode::call(num_args);
                 writer.push(opcode);
                 addr_placeholder!(addr);
                 for _ in 0..num_args {
-                    let arg = code.take::<Reg>().unwrap();
+                    let arg = code.take::<Reg>();
                     writer.push(arg);
                 }
                 code.skip::<Reg>();
@@ -490,7 +484,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 registers.set_named(to, false);
             }
             Bytecode::DJump => {
-                let addr = code.take::<Reg>().unwrap();
+                let addr = code.take::<Reg>();
                 if registers.named(addr) {
                     let addr = registers[addr].into_raw();
                     let addr = Addr::try_from(addr).unwrap();
@@ -501,23 +495,19 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 }
             }
             Bytecode::DCall => {
-                let addr = code.take::<Reg>().unwrap();
+                let addr = code.take::<Reg>();
                 let num_args = {
-                    let n = code.take::<Int>().unwrap();
+                    let n = code.take::<Int>();
                     usize::try_from(n).unwrap()
                 };
                 let args_start = code.offset();
                 for i in 0..num_args {
-                    let arg = code
-                        .read_at::<Reg>(args_start + i * std::mem::size_of::<Reg>())
-                        .unwrap();
+                    let arg = code.read_at::<Reg>(args_start + i * std::mem::size_of::<Reg>());
                     if registers.named(arg) {
                         write![Opcode::Value, registers[arg], arg];
                     }
                 }
-                let ret = code
-                    .read_at::<Reg>(args_start + num_args * std::mem::size_of::<Reg>())
-                    .unwrap();
+                let ret = code.read_at::<Reg>(args_start + num_args * std::mem::size_of::<Reg>());
                 if registers.named(addr) {
                     let opcode = Opcode::call(num_args);
                     writer.push(opcode);
@@ -529,14 +519,14 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 }
                 registers.set_named(ret, false);
                 for _ in 0..num_args {
-                    let arg = code.take::<Reg>().unwrap();
+                    let arg = code.take::<Reg>();
                     writer.push(arg);
                 }
                 code.skip::<Reg>();
                 write![num_regs, ret];
             }
             Bytecode::RetR => {
-                let reg = code.take::<Reg>().unwrap();
+                let reg = code.take::<Reg>();
                 if registers.named(reg) {
                     write![Opcode::RetI, registers[reg]];
                 } else {
@@ -544,7 +534,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 }
             }
             Bytecode::RetI => {
-                let int = code.take::<Int>().unwrap();
+                let int = code.take::<Int>();
                 write![Opcode::RetI, Value::int(int)];
             }
             Bytecode::Int => {
@@ -553,14 +543,14 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 registers[to] = Value::int(int);
             }
             Bytecode::Str => {
-                let num_chars = code.take::<Int>().unwrap();
+                let num_chars = code.take::<Int>();
                 let len = num_chars.try_into().unwrap();
                 let ptr = gc.alloc(len);
                 for i in 0..usize::try_from(len).unwrap() {
-                    let ch = code.take::<Int>().unwrap();
+                    let ch = code.take::<Int>();
                     *gc.get_mut(ptr, i) = Value::int(ch);
                 }
-                let to = code.take::<Reg>().unwrap();
+                let to = code.take::<Reg>();
                 write![Opcode::Value, Value::ptr_unchecked(ptr), to];
                 registers.set_named(to, false);
             }
@@ -617,7 +607,7 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
                 registers.set_named(to, false);
             }
             Bytecode::GetR => {
-                let [arr, idx, to] = code.take::<[Reg; 3]>().unwrap();
+                let [arr, idx, to] = code.take::<[Reg; 3]>();
                 if registers.named(idx) {
                     let idx = registers[idx];
                     write![Opcode::GetI, arr, idx.as_int_unchecked(), to];
@@ -707,30 +697,17 @@ pub fn lower_bytecode(code: ByteReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[
 
     locs.insert(code.offset(), writer.len());
 
-    let mut editor = writer.as_mut();
     for (i, addr) in froms {
         let new_addr = locs[&usize::try_from(addr).unwrap()];
-        editor.set_offset(i);
-        editor.write::<Addr>(new_addr.try_into().unwrap());
+        writer.write_at::<Addr>(i, new_addr.try_into().unwrap());
     }
 
     writer.into_inner()
 }
 
-impl FromBytes for Opcode {
-    fn from_bytes<R: Read>(reader: &R) -> Option<Self> {
-        reader.read_byte().and_then(Self::from_raw)
-    }
-
-    #[cfg(feature = "unsafe")]
-    unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
-        Self::from_raw_unchecked(reader.read_byte_unchecked())
-    }
-}
-
-impl ToBytes for Opcode {
-    fn to_bytes<W: Write>(self, writer: &mut W) -> Option<usize> {
-        writer.write(self as u8)
+impl AsBytes for Opcode {
+    fn to_bytes(self, buf: &mut [u8]) {
+        buf[0] = self as u8;
     }
 }
 

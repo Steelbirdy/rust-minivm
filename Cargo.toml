@@ -7,8 +7,10 @@ edition = "2021"
 debug = 1
 
 [features]
-default = ["check_bounds"]
-check_bounds = []
+default = ["check-bounds"]
+debug = []
+check-bounds = []
+trace-execution = []
 unsafe = []
 
 [dependencies]

@@ -6,26 +6,23 @@ pub use assembler::Assembler;
 pub use bytecode::Bytecode;
 pub use debug::disassemble;
 
-use crate::{
-    common::{Interner, OwnedByteBuffer},
-    parse::SyntaxTree,
-};
+use crate::{common::Interner, parse::SyntaxTree};
 
-pub fn assemble(tree: &SyntaxTree, interner: &mut Interner) -> OwnedByteBuffer {
-    OwnedByteBuffer::new(Assembler::new(tree, interner).finish())
+pub fn assemble(tree: &SyntaxTree, interner: &mut Interner) -> Box<[u8]> {
+    Assembler::new(tree, interner).finish()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::ByteReader;
+    use crate::common::BytecodeReader;
     use expect_test::{expect, Expect};
 
     fn check(source: &str, expect: Expect) {
         let mut interner = Interner::new();
         let result = crate::parse::parse(source);
         let bytecode = Assembler::new(&result.syntax_tree(), &mut interner).finish();
-        let reader = ByteReader::new(&bytecode);
+        let reader = BytecodeReader::new(&bytecode);
         let actual = disassemble(reader);
         expect.assert_eq(&actual);
     }

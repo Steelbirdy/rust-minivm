@@ -1,5 +1,5 @@
 use crate::{
-    common::{self, Read},
+    common::{self, BytecodeReader},
     vm::Opcode,
 };
 use std::fmt::{self, Write};
@@ -24,20 +24,20 @@ impl fmt::Debug for Arg {
     }
 }
 
-pub fn disassemble_instruction<R: Read>(code: &R, buf: &mut String) {
+pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
     use Opcode::*;
 
     macro_rules! args {
         ($($ty:ident),* $(,)?) => {{
             let args: Vec<Arg> = vec![$(
-                Arg::$ty(code.take().unwrap()),
+                Arg::$ty(code.take()),
             )*];
             writeln!(buf, " {args:?}").unwrap();
         }};
     }
 
     let offset = code.offset();
-    let opcode = code.take::<Opcode>().unwrap();
+    let opcode = code.take::<Opcode>();
     let as_str = opcode.as_str();
     let padding = " ".repeat(9 - as_str.len());
     write!(buf, "{offset:>04} | {as_str}{padding}").unwrap();
@@ -66,11 +66,11 @@ pub fn disassemble_instruction<R: Read>(code: &R, buf: &mut String) {
         Call7 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         Call8 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         CallV => {
-            let addr = Arg::Addr(code.take().unwrap());
-            let num_args = code.take::<common::Int>().unwrap();
+            let addr = Arg::Addr(code.take());
+            let num_args = code.take::<common::Int>();
             write!(buf, " [{addr:?}, {num_args}").unwrap();
             for _ in 0..num_args + 2 {
-                write!(buf, ", {:?}", Arg::Reg(code.take().unwrap())).unwrap();
+                write!(buf, ", {:?}", Arg::Reg(code.take())).unwrap();
             }
             // writeln!(buf, ", {:?}]", Arg::Reg(code.take().unwrap())).unwrap();
         }
@@ -85,11 +85,11 @@ pub fn disassemble_instruction<R: Read>(code: &R, buf: &mut String) {
         DCall7 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         DCall8 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         DCallV => {
-            let addr = Arg::Reg(code.take().unwrap());
-            let num_args = code.take::<common::Int>().unwrap();
+            let addr = Arg::Reg(code.take());
+            let num_args = code.take::<common::Int>();
             write!(buf, " [{addr:?}, {num_args}").unwrap();
             for _ in 0..num_args + 2 {
-                write!(buf, ", {:?}", Arg::Reg(code.take().unwrap())).unwrap();
+                write!(buf, ", {:?}", Arg::Reg(code.take())).unwrap();
             }
             // writeln!(buf, ", {:?}]", Arg::Reg(code.take().unwrap())).unwrap();
         }
@@ -118,14 +118,13 @@ pub fn disassemble_instruction<R: Read>(code: &R, buf: &mut String) {
     }
 }
 
-pub fn disassemble<R: Read>(code: R) -> String {
+pub fn disassemble(mut code: BytecodeReader) -> String {
     let mut buf = String::new();
 
     while !code.is_at_end() {
-        disassemble_instruction(&code, &mut buf);
+        disassemble_instruction(&mut code, &mut buf);
     }
 
-    code.reset();
     buf.pop();
     buf
 }

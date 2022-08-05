@@ -1,5 +1,5 @@
 use crate::{
-    common::{self, ByteReader, Read},
+    common::{self, BytecodeReader},
     compile::bytecode::Bytecode,
 };
 use std::fmt::{self, Write};
@@ -23,14 +23,23 @@ impl fmt::Debug for Arg {
     }
 }
 
-pub fn disassemble(code: ByteReader) -> String {
+pub fn disassemble(mut code: BytecodeReader) -> String {
     use Bytecode::*;
     let mut buf = String::new();
+
+    macro_rules! take {
+        () => {
+            code.take()
+        };
+        ($ty:ty) => {
+            code.take::<$ty>()
+        };
+    }
 
     macro_rules! args {
         ($($ty:ident),* $(,)?) => {{
             let args: Vec<Arg> = vec![$(
-                Arg::$ty(code.take().unwrap()),
+                Arg::$ty(take!()),
             )*];
             writeln!(buf, " {args:?}").unwrap();
         }};
@@ -38,7 +47,7 @@ pub fn disassemble(code: ByteReader) -> String {
 
     while !code.is_at_end() {
         let offset = code.offset();
-        let opcode = code.take::<Bytecode>().unwrap();
+        let opcode = take!(Bytecode);
         let as_str = opcode.as_str();
         let padding = " ".repeat(9 - as_str.len());
         write!(buf, "{offset:>04} | {as_str}{padding}").unwrap();
@@ -60,35 +69,35 @@ pub fn disassemble(code: ByteReader) -> String {
             JumpLtRI | JumpLeRI => args!(Reg, Int, Addr),
             JumpLtIR | JumpLeIR | JumpEqIR | JumpNeIR => args!(Int, Reg, Addr),
             Call => {
-                let addr = Arg::Addr(code.take().unwrap());
-                let num_args = code.take::<common::Int>().unwrap();
+                let addr = Arg::Addr(code.take());
+                let num_args = take!(common::Int);
                 write!(buf, " [{addr:?}, {num_args}").unwrap();
                 for _ in 0..num_args {
-                    write!(buf, ", {:?}", Arg::Reg(code.take().unwrap())).unwrap();
+                    write!(buf, ", {:?}", Arg::Reg(take!())).unwrap();
                 }
-                writeln!(buf, ", {:?}]", Arg::Reg(code.take().unwrap())).unwrap();
+                writeln!(buf, ", {:?}]", Arg::Reg(take!())).unwrap();
             }
             Addr => args!(Addr, Reg),
             DJump => args!(Reg),
             DCall => {
-                let addr = Arg::Reg(code.take().unwrap());
-                let num_args = code.take::<common::Int>().unwrap();
+                let addr = Arg::Reg(take!());
+                let num_args = take!(common::Int);
                 write!(buf, " [{addr:?}, {num_args}").unwrap();
                 for _ in 0..num_args {
-                    write!(buf, ", {:?}", Arg::Reg(code.take().unwrap())).unwrap();
+                    write!(buf, ", {:?}", Arg::Reg(take!())).unwrap();
                 }
-                writeln!(buf, ", {:?}]", Arg::Reg(code.take().unwrap())).unwrap();
+                writeln!(buf, ", {:?}]", Arg::Reg(take!())).unwrap();
             }
             RetR => args!(Reg),
             RetI => args!(Int),
             Int => args!(Int, Reg),
             Str => {
-                let len = code.take::<common::Int>().unwrap();
+                let len = take!(common::Int);
                 write!(buf, " [{len}").unwrap();
                 for _ in 0..len {
-                    write!(buf, ", {:?}", Arg::Char(code.take().unwrap())).unwrap();
+                    write!(buf, ", {:?}", Arg::Char(take!())).unwrap();
                 }
-                writeln!(buf, ", {:?}]", Arg::Reg(code.take().unwrap())).unwrap();
+                writeln!(buf, ", {:?}]", Arg::Reg(take!())).unwrap();
             }
             AddRR | SubRR | MulRR | DivRR | ModRR => args!(Reg, Reg, Reg),
             AddIR | SubIR | MulIR | DivIR | ModIR => args!(Int, Reg, Reg),
@@ -112,7 +121,6 @@ pub fn disassemble(code: ByteReader) -> String {
         }
     }
 
-    code.reset();
     buf.pop();
     buf
 }

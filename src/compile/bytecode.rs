@@ -1,19 +1,8 @@
-use crate::common::{FromBytes, Read, ToBytes, Write};
+use crate::common::AsBytes;
 
-impl FromBytes for Bytecode {
-    fn from_bytes<R: Read>(reader: &R) -> Option<Self> {
-        reader.read_byte().and_then(Self::from_raw)
-    }
-
-    #[cfg(feature = "unsafe")]
-    unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
-        Self::from_raw_unchecked(reader.read_byte_unchecked())
-    }
-}
-
-impl ToBytes for Bytecode {
-    fn to_bytes<W: Write>(self, writer: &mut W) -> Option<usize> {
-        writer.write(self as u8)
+impl AsBytes for Bytecode {
+    fn to_bytes(self, buf: &mut [u8]) {
+        buf[0] = self as u8;
     }
 }
 

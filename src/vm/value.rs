@@ -1,6 +1,5 @@
-use crate::common::{Read, Write};
 use crate::{
-    common::{FromBytes, Int, ToBytes},
+    common::{AsBytes, Int},
     vm::Ptr,
 };
 use std::cmp::Ordering;
@@ -28,20 +27,9 @@ impl fmt::Debug for Value {
     }
 }
 
-impl FromBytes for Value {
-    fn from_bytes<R: Read>(reader: &R) -> Option<Self> {
-        Repr::from_bytes(reader).map(Value)
-    }
-
-    #[cfg(feature = "unsafe")]
-    unsafe fn from_bytes_unchecked<R: Read>(reader: &R) -> Self {
-        Value(Repr::from_bytes_unchecked(reader))
-    }
-}
-
-impl ToBytes for Value {
-    fn to_bytes<W: Write>(self, writer: &mut W) -> Option<usize> {
-        Repr::to_bytes(self.0, writer)
+impl AsBytes for Value {
+    fn to_bytes(self, buf: &mut [u8]) {
+        Repr::to_bytes(self.0, buf);
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::{
-    common::{Addr, ByteWriter, Int, Interner, Key, Push, Reg},
+    common::{Addr, BytecodeBuilder, Int, Interner, Key, Reg},
     compile::bytecode::Bytecode,
     parse::{ast, SyntaxTree},
 };
@@ -104,7 +104,7 @@ impl<'a> Assembler<'a> {
             }
         }
 
-        let mut code = ByteWriter::default();
+        let mut code = BytecodeBuilder::default();
         for instr in &self.asm {
             match instr {
                 Asm::Op(opcode) => {
