@@ -12,18 +12,19 @@ mod parse;
 mod vm;
 
 pub use common::config::Diagnostic;
-pub use common::{config, BytecodeReader, Interner};
+pub use common::{config, BytecodeBuffer, BytecodeBuilder, BytecodeReader, Interner};
 pub use compile::{assemble, disassemble as disassemble_bytecode};
 pub use parse::{lex, parse, validate};
-pub use vm::{disassemble as disassemble_opcode, lower_bytecode, trace_jumps, Gc, Value, Vm};
+pub use vm::{
+    disassemble as disassemble_opcode, lower_bytecode, trace_jumps, Gc, RuntimeError, Value, Vm,
+};
 
 use common::config::VmDiagnostic;
 
-pub fn run(process: &config::Process) -> Result<Value, Vec<Diagnostic>> {
+pub fn compile(process: &config::Process) -> Result<(BytecodeBuffer, Gc), Vec<Diagnostic>> {
     let mut interner = Interner::new();
     let mut gc = Gc::new();
 
-    // Parsing (source -> AST)
     let parse_result = parse(process.source);
     if parse_result.has_errors() {
         return Err(parse_result
@@ -38,31 +39,32 @@ pub fn run(process: &config::Process) -> Result<Value, Vec<Diagnostic>> {
             .map(|err| err.to_diagnostic(process))
             .collect());
     }
-
-    // Assembly (AST -> bytecode)
-    let bytecode = assemble(parse_result.syntax_tree(), &mut interner);
-    let reader = BytecodeReader::new(&bytecode);
+    let bytecode = match assemble(parse_result.syntax_tree(), &mut interner) {
+        Ok(b) => b,
+        Err(errors) => {
+            return Err(errors
+                .iter()
+                .map(|err| err.to_diagnostic(process))
+                .collect());
+        }
+    };
     if process.config.dump_bytecode {
         println!("=== BYTECODE ===");
-        println!("{}", disassemble_bytecode(reader));
+        println!("{}", disassemble_bytecode(bytecode.reader()));
         println!("================\n");
     }
-    let jumps = trace_jumps(reader);
+    let jumps = trace_jumps(bytecode.reader());
 
     // Lowering (bytecode -> internal bytecode)
-    let opcode = lower_bytecode(reader, &jumps, &mut gc);
-    let reader = BytecodeReader::new(&opcode);
+    let opcode = lower_bytecode(bytecode.reader(), &jumps, &mut gc);
     if process.config.dump_internal_bytecode {
         println!("=== INTERNAL BYTECODE ===");
-        println!("{}", disassemble_opcode(reader));
+        println!("{}", disassemble_opcode(opcode.reader()));
         println!("=========================\n");
     }
+    Ok((opcode, gc))
+}
 
-    // Run the VM
-    #[cfg(feature = "trace-execution")]
-    println!("=== EXECUTION ===");
-    let ret = Vm::new(reader, gc, &process.config).run();
-    #[cfg(feature = "trace-execution")]
-    println!("===           ===");
-    Ok(ret)
+pub fn run(code: BytecodeReader, gc: Gc, process: &config::Process) -> Result<Value, RuntimeError> {
+    Ok(Vm::new(code, gc, &process.config).run())
 }

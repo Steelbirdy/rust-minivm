@@ -145,7 +145,27 @@ impl BytecodeBuilder {
         T::to_bytes(value, &mut self.buf[index..index + bytes]);
     }
 
-    pub fn into_inner(self) -> Box<[u8]> {
-        self.buf.into_boxed_slice()
+    pub fn finish(self) -> BytecodeBuffer {
+        BytecodeBuffer {
+            buf: self.buf.into_boxed_slice(),
+        }
+    }
+}
+
+pub struct BytecodeBuffer {
+    buf: Box<[u8]>,
+}
+
+impl BytecodeBuffer {
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    pub fn reader(&self) -> BytecodeReader<'_> {
+        BytecodeReader::new(&self.buf)
     }
 }

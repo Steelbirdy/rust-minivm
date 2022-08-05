@@ -8,7 +8,6 @@ debug = 1
 
 [features]
 default = ["check-bounds"]
-debug = []
 check-bounds = []
 trace-execution = []
 unsafe = []

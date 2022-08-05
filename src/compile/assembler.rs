@@ -1,19 +1,20 @@
 use crate::{
-    common::{Addr, BytecodeBuilder, Int, Interner, Key, Reg},
-    compile::bytecode::Bytecode,
+    common::{Addr, BytecodeBuffer, BytecodeBuilder, Int, Interner, Key, Reg},
+    compile::{bytecode::Bytecode, CompileError, CompileResult},
     parse::{ast, SyntaxTree},
 };
 use eventree_wrapper::syntax_tree::{AstNode, AstToken};
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::rc::Rc;
+use text_size::{TextRange, TextSize};
 
 #[derive(Debug, Clone)]
 enum Asm {
     Op(Bytecode),
     Int(Int),
     Reg(Reg),
-    LblRef(Key),
+    LblRef(LabelRef),
     LblLoc(Key),
     FuncEndRef(u32),
     FuncEndLoc(u32),
@@ -24,9 +25,13 @@ enum Asm {
 pub struct Assembler<'a> {
     tree: &'a SyntaxTree,
     interner: &'a mut Interner,
+    functions: FxHashMap<Key, TextRange>,
+    labels: FxHashMap<Key, TextRange>,
+    called_names: FxHashMap<Key, Vec<TextRange>>,
     num_funcs: u32,
     num_regs: Reg,
     asm: Vec<Asm>,
+    errors: Vec<CompileError>,
 }
 
 impl<'a> Assembler<'a> {
@@ -34,23 +39,28 @@ impl<'a> Assembler<'a> {
         Self {
             tree: program,
             interner,
+            functions: FxHashMap::default(),
+            labels: FxHashMap::default(),
+            called_names: FxHashMap::default(),
             num_funcs: 0,
             num_regs: 0,
             asm: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
-    pub fn finish(mut self) -> Box<[u8]> {
+    pub fn finish(mut self) -> CompileResult<BytecodeBuffer> {
         let root = ast::Root::cast(self.tree.root(), self.tree).unwrap();
 
         self.push(Bytecode::Jump);
-        self.push(Asm::LblRef(Key::entry_point()));
+        self.push(Asm::LblRef(LabelRef::entry_point()));
         for func in root.functions(self.tree) {
             self.num_regs = 0;
             self.push(func);
             self.num_funcs += 1;
         }
         self.patch_delayed();
+        self.check_called_names();
         self.link()
     }
 
@@ -70,12 +80,26 @@ impl<'a> Assembler<'a> {
         }
     }
 
+    fn check_called_names(&mut self) {
+        for (name, calls) in self.called_names.drain() {
+            if !self.functions.contains_key(&name) {
+                // If the name is completely undefined, a NameNotFound error will be given instead.
+                if let Some(&def_range) = self.labels.get(&name) {
+                    self.errors.push(CompileError::CallLabel {
+                        def_range,
+                        usages: calls,
+                    });
+                }
+            }
+        }
+    }
+
     fn intern_label(&mut self, label: ast::Label) -> Key {
         let text = label.text(self.tree);
         self.interner.intern(text)
     }
 
-    fn link(&self) -> Box<[u8]> {
+    fn link(mut self) -> CompileResult<BytecodeBuffer> {
         let mut func_ends = FxHashMap::<u32, Addr>::default();
         let mut labels = FxHashMap::<Key, Addr>::default();
 
@@ -91,7 +115,7 @@ impl<'a> Assembler<'a> {
                 Asm::Reg(_) => {
                     loc += std::mem::size_of::<Reg>();
                 }
-                Asm::LblRef(_) | Asm::FuncEndRef(_) => {
+                Asm::LblRef(..) | Asm::FuncEndRef(_) => {
                     loc += std::mem::size_of::<Addr>();
                 }
                 Asm::LblLoc(lbl) => {
@@ -116,8 +140,13 @@ impl<'a> Assembler<'a> {
                 Asm::Reg(reg) => {
                     code.push(*reg);
                 }
-                Asm::LblRef(lbl) => {
-                    code.push(labels[lbl]);
+                Asm::LblRef(LabelRef { name, range }) => {
+                    if let Some(&label) = labels.get(name) {
+                        code.push(label);
+                    } else {
+                        self.errors
+                            .push(CompileError::NameNotFound { range: *range });
+                    }
                 }
                 Asm::LblLoc(_) => {}
                 Asm::FuncEndRef(index) => {
@@ -128,24 +157,15 @@ impl<'a> Assembler<'a> {
             }
         }
 
-        code.into_inner()
+        if self.errors.is_empty() {
+            Ok(code.finish())
+        } else {
+            Err(self.errors)
+        }
     }
 
     fn push<T: Assemble>(&mut self, value: T) {
         value.assemble(self);
-    }
-
-    fn push_op(&mut self, op: Bytecode) {
-        self.asm.push(Asm::Op(op));
-    }
-
-    fn push_reg(&mut self, reg: Reg) {
-        self.num_regs = self.num_regs.max(reg);
-        self.asm.push(Asm::Reg(reg));
-    }
-
-    fn push_int(&mut self, int: Int) {
-        self.asm.push(Asm::Int(int));
     }
 
     fn push_delayed_int(&mut self) -> Delayed<Int> {
@@ -158,20 +178,6 @@ impl<'a> Assembler<'a> {
         let ret = Rc::new(Cell::new(0));
         self.asm.push(Asm::DelayedReg(Rc::clone(&ret)));
         Delayed(ret)
-    }
-
-    fn push_int_or_reg(&mut self, val: IntOrReg) {
-        match val {
-            IntOrReg::Int(int) => self.push_int(int),
-            IntOrReg::Reg(reg) => self.push_reg(reg),
-        }
-    }
-
-    fn push_lbl_or_reg(&mut self, val: LblOrReg) {
-        match val {
-            LblOrReg::Lbl(lbl) => self.asm.push(Asm::LblRef(lbl)),
-            LblOrReg::Reg(reg) => self.push_reg(reg),
-        }
     }
 }
 
@@ -215,8 +221,23 @@ enum IntOrReg {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum LblOrReg {
-    Lbl(Key),
+    Lbl(LabelRef),
     Reg(Reg),
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct LabelRef {
+    name: Key,
+    range: TextRange,
+}
+
+impl LabelRef {
+    fn entry_point() -> Self {
+        Self {
+            name: Key::entry_point(),
+            range: TextRange::empty(TextSize::from(0)),
+        }
+    }
 }
 
 macro_rules! args {
@@ -260,10 +281,14 @@ impl ToValue for ast::Register {
 }
 
 impl ToValue for ast::Label {
-    type Output = Key;
+    type Output = LabelRef;
 
     fn to_value(self, asm: &mut Assembler) -> Self::Output {
-        asm.intern_label(self)
+        let range = self.range(asm.tree);
+        LabelRef {
+            name: asm.intern_label(self),
+            range,
+        }
     }
 }
 
@@ -307,7 +332,11 @@ trait Assemble {
 
 impl Assemble for ast::Function {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        let name = asm.intern_label(self.name(asm.tree)?);
+        let name = self.name(asm.tree)?;
+        let name_range = name.range(asm.tree);
+        let name = asm.intern_label(name);
+        asm.functions.insert(name, name_range);
+
         asm.push(Bytecode::Func);
         asm.push(Asm::FuncEndRef(asm.num_funcs));
         let num_regs = asm.push_delayed_reg();
@@ -345,42 +374,47 @@ impl Assemble for ast::Instruction {
 
 impl Assemble for Int {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        asm.push_int(self);
+        asm.asm.push(Asm::Int(self));
         Some(())
     }
 }
 
 impl Assemble for Reg {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        asm.push_reg(self);
+        asm.num_regs = asm.num_regs.max(self);
+        asm.asm.push(Asm::Reg(self));
         Some(())
     }
 }
 
-impl Assemble for Key {
+impl Assemble for LabelRef {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        asm.push(Asm::LblRef(self));
+        asm.asm.push(Asm::LblRef(self));
         Some(())
     }
 }
 
 impl Assemble for IntOrReg {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        asm.push_int_or_reg(self);
-        Some(())
+        match self {
+            IntOrReg::Int(int) => int.assemble(asm),
+            IntOrReg::Reg(reg) => reg.assemble(asm),
+        }
     }
 }
 
 impl Assemble for LblOrReg {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        asm.push_lbl_or_reg(self);
-        Some(())
+        match self {
+            LblOrReg::Lbl(lbl) => lbl.assemble(asm),
+            LblOrReg::Reg(reg) => reg.assemble(asm),
+        }
     }
 }
 
 impl Assemble for Bytecode {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
-        asm.push_op(self);
+        asm.asm.push(Asm::Op(self));
         Some(())
     }
 }
@@ -395,6 +429,9 @@ impl Assemble for Asm {
 impl Assemble for ast::LabelDef {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
         let name = asm.intern_label(self.name(asm.tree)?);
+        let range = self.range(asm.tree);
+        asm.labels.insert(name, range);
+
         asm.push(Asm::LblLoc(name));
         Some(())
     }
@@ -559,10 +596,17 @@ impl Assemble for ast::InstrBLt {
 impl Assemble for ast::InstrCall {
     fn assemble(self, asm: &mut Assembler) -> Option<()> {
         let (to, func) = args!(self, asm; to, func);
-        asm.push(match func {
-            LblOrReg::Lbl(_) => Bytecode::Call,
+        let bytecode = match func {
+            LblOrReg::Lbl(lbl) => {
+                asm.called_names
+                    .entry(lbl.name)
+                    .or_default()
+                    .push(lbl.range);
+                Bytecode::Call
+            }
             LblOrReg::Reg(_) => Bytecode::DCall,
-        });
+        };
+        asm.push(bytecode);
         asm.push(func);
         let args: Vec<_> = self.args(asm.tree).map(|arg| arg.to_value(asm)).collect();
         asm.push::<Int>(args.len().try_into().unwrap());
@@ -709,6 +753,7 @@ impl Assemble for ast::InstrJumpEq {
         asm.push(op);
         asm.push(lhs);
         asm.push(rhs);
+        asm.push(addr);
         asm.push(Asm::LblRef(addr));
         Some(())
     }

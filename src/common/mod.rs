@@ -2,7 +2,7 @@ mod bytes;
 pub mod config;
 mod interner;
 
-pub use bytes::{AsBytes, BytecodeBuilder, BytecodeReader};
+pub use bytes::{AsBytes, BytecodeBuffer, BytecodeBuilder, BytecodeReader};
 pub use interner::{Interner, Key};
 
 pub const ENTRY_POINT_LBL: &str = "__entry";

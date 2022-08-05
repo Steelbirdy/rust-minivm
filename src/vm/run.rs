@@ -5,7 +5,7 @@ use crate::{
         config::{self, RunConfig},
         Addr, AsBytes, BytecodeReader, Int, Reg,
     },
-    vm::{disassemble_instruction, Gc, Opcode, Value},
+    vm::{disassemble_instruction, Gc, Opcode, RuntimeError, Value},
 };
 use std::io::{BufWriter, StdoutLock, Write};
 use std::mem;

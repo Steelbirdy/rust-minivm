@@ -1,14 +1,21 @@
 mod assembler;
 mod bytecode;
 mod debug;
+mod error;
 
 pub use assembler::Assembler;
 pub use bytecode::Bytecode;
 pub use debug::disassemble;
+pub use error::CompileError;
 
-use crate::{common::Interner, parse::SyntaxTree};
+pub type CompileResult<T> = Result<T, Vec<CompileError>>;
 
-pub fn assemble(tree: &SyntaxTree, interner: &mut Interner) -> Box<[u8]> {
+use crate::{
+    common::{BytecodeBuffer, Interner},
+    parse::SyntaxTree,
+};
+
+pub fn assemble(tree: &SyntaxTree, interner: &mut Interner) -> CompileResult<BytecodeBuffer> {
     Assembler::new(tree, interner).finish()
 }
 
@@ -21,9 +28,10 @@ mod tests {
     fn check(source: &str, expect: Expect) {
         let mut interner = Interner::new();
         let result = crate::parse::parse(source);
-        let bytecode = Assembler::new(&result.syntax_tree(), &mut interner).finish();
-        let reader = BytecodeReader::new(&bytecode);
-        let actual = disassemble(reader);
+        let bytecode = Assembler::new(&result.syntax_tree(), &mut interner)
+            .finish()
+            .unwrap();
+        let actual = disassemble(bytecode.reader());
         expect.assert_eq(&actual);
     }
 

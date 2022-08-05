@@ -1,5 +1,5 @@
 use crate::{
-    common::{config, Addr, AsBytes, BytecodeBuilder, BytecodeReader, Int, Reg},
+    common::{config, Addr, AsBytes, BytecodeBuffer, BytecodeBuilder, BytecodeReader, Int, Reg},
     compile::Bytecode,
     vm::{self, Gc, Jump, JumpSet, Value},
 };
@@ -44,7 +44,7 @@ impl IndexMut<Reg> for Registers {
     }
 }
 
-pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) -> Box<[u8]> {
+pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) -> BytecodeBuffer {
     let mut writer = BytecodeBuilder::default();
     let mut locs = FxHashMap::default();
     let mut froms = FxHashMap::default();
@@ -702,7 +702,7 @@ pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) 
         writer.write_at::<Addr>(i, new_addr.try_into().unwrap());
     }
 
-    writer.into_inner()
+    writer.finish()
 }
 
 impl AsBytes for Opcode {
