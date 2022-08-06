@@ -23,30 +23,6 @@ fn run<'a>(
     (process, ret)
 }
 
-// fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
-//     let mut stdin = std::io::stdin().lines();
-//     loop {
-//         let mut buf = String::new();
-//
-//         print!(">>> ");
-//         std::io::stdout().flush()?;
-//         while let Some(Ok(line)) = stdin.next() {
-//             if line.is_empty() {
-//                 break;
-//             }
-//             buf.push_str(&line);
-//             buf.push('\n');
-//             print!("... ");
-//             std::io::stdout().flush()?;
-//         }
-//
-//         if buf.is_empty() {
-//             return Ok(());
-//         }
-//         run(&buf);
-//     }
-// }
-
 type RunOutput = (Process<'static>, Result<Value, Vec<Diagnostic>>);
 
 fn run_from_file(path: &str, config: RunConfig) -> Result<RunOutput, Box<dyn std::error::Error>> {

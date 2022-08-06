@@ -621,7 +621,7 @@ pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) 
             }
             Bytecode::SetII => {
                 let (arr, idx, val) = take![Reg, Int, Int];
-                write![Opcode::SetII, arr, idx, val];
+                write![Opcode::SetII, arr, idx, Value::int_unchecked(val)];
             }
             Bytecode::SetRR => {
                 let (arr, idx, val) = take![Reg, Reg, Reg];
@@ -630,12 +630,12 @@ pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) 
                         Opcode::SetII,
                         arr,
                         registers[idx].as_int_unchecked(),
-                        registers[val].as_int_unchecked(),
+                        registers[val],
                     ];
                 } else if registers.named(idx) {
                     write![Opcode::SetIR, arr, registers[idx].as_int_unchecked(), val,];
                 } else if registers.named(val) {
-                    write![Opcode::SetRI, arr, idx, registers[val].as_int_unchecked(),];
+                    write![Opcode::SetRI, arr, idx, registers[val]];
                 } else {
                     write![Opcode::SetRR, arr, idx, val,];
                 }
@@ -643,17 +643,22 @@ pub fn lower_bytecode(mut code: BytecodeReader, jumps: &[JumpSet], gc: &mut Gc) 
             Bytecode::SetRI => {
                 let (arr, idx, val) = take![Reg, Reg, Int];
                 if registers.named(idx) {
-                    write![Opcode::SetII, arr, registers[idx].as_int_unchecked(), val,];
+                    write![
+                        Opcode::SetII,
+                        arr,
+                        registers[idx].as_int_unchecked(),
+                        Value::int_unchecked(val)
+                    ];
                 } else {
-                    write![Opcode::SetRI, arr, idx, val,];
+                    write![Opcode::SetRI, arr, idx, val];
                 }
             }
             Bytecode::SetIR => {
                 let (arr, idx, val) = take![Reg, Int, Reg];
                 if registers.named(val) {
-                    write![Opcode::SetII, arr, idx, registers[val].as_int_unchecked(),];
+                    write![Opcode::SetII, arr, idx, registers[val]];
                 } else {
-                    write![Opcode::SetIR, arr, idx, val,];
+                    write![Opcode::SetIR, arr, idx, val];
                 }
             }
             Bytecode::Len => {
@@ -873,24 +878,6 @@ pub enum Opcode {
 }
 
 impl Opcode {
-    #[allow(unsafe_code)]
-    pub fn from_raw(raw: u8) -> Option<Self> {
-        if raw > Self::__MAX as u8 {
-            return None;
-        }
-        // SAFETY:
-        // * All discriminants in the range 0..(Self::__MAX as u8) are valid Opcode variants.
-        // * We just checked that `raw` is in this range.
-        // * Hence `raw` is a valid Opcode variant.
-        // qed
-        Some(unsafe { Self::from_raw_unchecked(raw) })
-    }
-
-    #[allow(unsafe_code)]
-    unsafe fn from_raw_unchecked(raw: u8) -> Self {
-        std::mem::transmute(raw)
-    }
-
     pub fn call(num_args: usize) -> Self {
         match num_args {
             0 => Self::Call0,

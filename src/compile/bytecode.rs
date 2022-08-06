@@ -73,24 +73,6 @@ pub enum Bytecode {
 }
 
 impl Bytecode {
-    #[allow(unsafe_code)]
-    pub fn from_raw(raw: u8) -> Option<Self> {
-        if raw > Self::__MAX as u8 {
-            return None;
-        }
-        // SAFETY:
-        // * All discriminants in the range 0..(Self::__MAX as u8) are valid Bytecode variants.
-        // * We just checked that `raw` is in this range.
-        // * Hence `raw` is a valid Bytecode variant.
-        // qed
-        Some(unsafe { Self::from_raw_unchecked(raw) })
-    }
-
-    #[allow(unsafe_code)]
-    unsafe fn from_raw_unchecked(raw: u8) -> Self {
-        std::mem::transmute(raw)
-    }
-
     pub fn as_str(self) -> &'static str {
         use Bytecode::*;
 

@@ -147,7 +147,7 @@ impl Value {
 
     #[must_use]
     pub const fn as_ptr_unchecked(self) -> Ptr {
-        Ptr::from_le_bytes(self.0.to_le_bytes())
+        Ptr::from_le_bytes((self.0 >> 1).to_le_bytes())
     }
 
     #[must_use]

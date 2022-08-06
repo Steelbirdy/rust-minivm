@@ -166,9 +166,6 @@ impl<'a> Vm<'a> {
     }
 
     fn pop_frame(&mut self) {
-        if self.stack_ptr == 0 {
-            panic!("stack underflow");
-        }
         self.stack_ptr -= 1;
         self.code.set_offset(self.call_stack[self.stack_ptr]);
         let num_regs = self.read_at::<Reg>(self.code.offset() - mem::size_of::<Reg>());
