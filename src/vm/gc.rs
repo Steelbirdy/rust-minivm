@@ -22,7 +22,7 @@ impl Ptr {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 struct GcHeader {
     mark: u16,
@@ -122,7 +122,7 @@ impl Gc {
         if self.buf.capacity() <= next_head + 4 {
             let new_capacity = (next_head + 4) * 2;
             self.buf.reserve(new_capacity - self.buf.capacity());
-            self.buf.resize_with(self.buf.capacity(), Default::default);
+            self.buf.resize(self.buf.capacity(), GcData::default());
         }
         let ret = self.buf_used;
         self.buf[ret] = GcData::new_header(false, ValueKind::Ptr, len);
@@ -136,24 +136,24 @@ impl Gc {
         self.buf[ptr.0 - 1].header().size
     }
 
-    #[cfg(feature = "check_bounds")]
+    #[cfg(feature = "check-bounds")]
     #[must_use]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
         self.buf[ptr.0 - 1].header().len()
     }
 
-    #[cfg(feature = "check_bounds")]
+    #[cfg(feature = "check-bounds")]
     fn check_bounds(&self, ptr: Ptr, idx: usize) {
         let len = self.array_len_usize(ptr);
         assert!(
-            idx >= len,
+            idx < len,
             "array index out of bounds: the length is {len} but the index is {idx}"
         );
     }
 
     #[must_use]
     pub fn get(&self, ptr: Ptr, idx: usize) -> Value {
-        #[cfg(feature = "check_bounds")]
+        #[cfg(feature = "check-bounds")]
         self.check_bounds(ptr, idx);
 
         self.buf[ptr.0 + idx].value()
@@ -161,10 +161,10 @@ impl Gc {
 
     #[must_use]
     pub fn get_mut(&mut self, ptr: Ptr, idx: usize) -> &mut Value {
-        #[cfg(feature = "check_bounds")]
+        #[cfg(feature = "check-bounds")]
         self.check_bounds(ptr, idx);
 
-        self.buf[ptr.0 + idx + 1].value_mut()
+        self.buf[ptr.0 + idx].value_mut()
     }
 
     #[must_use]

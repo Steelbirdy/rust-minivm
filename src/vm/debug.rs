@@ -109,7 +109,7 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
         SetII => args!(Reg, Int, Value),
         SetRR => args!(Reg, Reg, Reg),
         SetRI => args!(Reg, Reg, Value),
-        SetIR => args!(Reg, Value, Reg),
+        SetIR => args!(Reg, Int, Reg),
         Len => args!(Reg, Reg),
         Type => args!(Reg, Reg),
         PutcR => args!(Reg),
