@@ -335,12 +335,12 @@ mod tests {
 
     #[test]
     fn lex_putchar() {
-        check("putchar", expect!["Putchar@0..4"]);
+        check("putchar", expect!["Putc@0..7"]);
     }
 
     #[test]
     fn lex_reg() {
-        check("reg", expect!["Reg@0..4"]);
+        check("reg", expect!["Reg@0..3"]);
     }
 
     #[test]
@@ -460,8 +460,7 @@ Add@4..7"
             "# this is a comment\nadd",
             expect![
                 "\
-Comment@0..19
-LineBreak@19..20
+Comment@0..20
 Add@20..23"
             ],
         );

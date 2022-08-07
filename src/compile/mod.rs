@@ -22,7 +22,6 @@ pub fn assemble(tree: &SyntaxTree, interner: &mut Interner) -> CompileResult<Byt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::BytecodeReader;
     use expect_test::{expect, Expect};
 
     fn check(source: &str, expect: Expect) {

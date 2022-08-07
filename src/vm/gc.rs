@@ -2,6 +2,10 @@ use crate::vm::{
     value::{Value, ValueKind},
     Len,
 };
+use std::fmt;
+
+#[cfg(feature = "check-bounds")]
+use crate::vm::RuntimeError;
 
 const GC_MIN_THRESHOLD: usize = 1 << 12;
 
@@ -19,6 +23,12 @@ impl Ptr {
 
     pub(in crate::vm) const fn from_le_bytes(bytes: [u8; std::mem::size_of::<Ptr>()]) -> Self {
         Self(usize::from_le_bytes(bytes))
+    }
+}
+
+impl fmt::Display for Ptr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -136,34 +146,29 @@ impl Gc {
         self.buf[ptr.0 - 1].header().size
     }
 
-    #[cfg(feature = "check-bounds")]
     #[must_use]
+    #[cfg(feature = "check-bounds")]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
         self.buf[ptr.0 - 1].header().len()
     }
 
     #[cfg(feature = "check-bounds")]
-    fn check_bounds(&self, ptr: Ptr, idx: usize) {
+    pub fn check_bounds(&self, ptr: Ptr, idx: usize) -> Result<(), RuntimeError> {
         let len = self.array_len_usize(ptr);
-        assert!(
-            idx < len,
-            "array index out of bounds: the length is {len} but the index is {idx}"
-        );
+        if idx < len {
+            Ok(())
+        } else {
+            Err(RuntimeError::OutOfBounds { ptr, index: idx, len })
+        }
     }
 
     #[must_use]
     pub fn get(&self, ptr: Ptr, idx: usize) -> Value {
-        #[cfg(feature = "check-bounds")]
-        self.check_bounds(ptr, idx);
-
         self.buf[ptr.0 + idx].value()
     }
 
     #[must_use]
     pub fn get_mut(&mut self, ptr: Ptr, idx: usize) -> &mut Value {
-        #[cfg(feature = "check-bounds")]
-        self.check_bounds(ptr, idx);
-
         self.buf[ptr.0 + idx].value_mut()
     }
 

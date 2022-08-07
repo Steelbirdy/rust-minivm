@@ -5,10 +5,13 @@ use crate::{
         config::{self, RunConfig},
         Addr, AsBytes, BytecodeReader, Int, Reg,
     },
-    vm::{disassemble_instruction, Gc, Opcode, RuntimeError, Value},
+    vm::{Gc, Opcode, RuntimeError, Value},
 };
 use std::io::{BufWriter, StdoutLock, Write};
 use std::mem;
+
+#[cfg(feature = "trace-execution")]
+use crate::vm::disassemble_instruction;
 
 pub struct Vm<'a> {
     code: BytecodeReader<'a>,
@@ -19,8 +22,10 @@ pub struct Vm<'a> {
     frame_start: usize,
     stdout: BufWriter<StdoutLock<'static>>,
     char_buf: [u8; 4],
+    #[cfg(feature = "trace-execution")]
     buf: String,
     config: &'a RunConfig,
+    error: Option<RuntimeError>,
 }
 
 impl<'a> Vm<'a> {
@@ -34,8 +39,10 @@ impl<'a> Vm<'a> {
             frame_start: 0,
             stdout: BufWriter::new(std::io::stdout().lock()),
             char_buf: [0; 4],
+            #[cfg(feature = "trace-execution")]
             buf: String::new(),
             config,
+            error: None,
         }
     }
 
@@ -45,17 +52,16 @@ impl<'a> Vm<'a> {
     }
 
     #[inline]
-    fn read<T: AsBytes>(&self) -> T {
-        self.code.read()
-    }
-
-    #[inline]
     fn take<T: AsBytes>(&mut self) -> T {
         self.code.take()
     }
 
-    pub fn run(&mut self) -> Value {
+    pub fn run(&mut self) -> Result<Value, RuntimeError> {
         while !self.code.is_at_end() {
+            if let Some(error) = self.error.take() {
+                return Err(error);
+            }
+
             #[cfg(feature = "trace-execution")]
             self.debug_next();
 
@@ -139,9 +145,10 @@ impl<'a> Vm<'a> {
                 Opcode::__MAX => unreachable!(),
             }
         }
-        self.registers[self.frame_start]
+        Ok(self.registers[self.frame_start])
     }
 
+    #[cfg(feature = "trace-execution")]
     fn debug_next(&mut self) {
         self.code
             .at_checkpoint(|code| disassemble_instruction(code, &mut self.buf));
@@ -158,6 +165,27 @@ impl<'a> Vm<'a> {
         }
     }
 
+    fn check_stack_overflow(&mut self) -> bool {
+        let is_overflow = self.stack_ptr == self.call_stack.len();
+        if is_overflow {
+            self.error = Some(RuntimeError::StackOverflow);
+        }
+        is_overflow
+    }
+
+    fn check_stack_underflow(&mut self) -> bool {
+        let is_underflow = self.stack_ptr == 0;
+        if is_underflow {
+            self.seek_to_end();
+        }
+        is_underflow
+    }
+
+    fn seek_to_end(&mut self) {
+        self.code.set_offset(self.code.len());
+    }
+
+    #[inline]
     fn push_frame(&mut self, num_regs: Reg, addr: usize) {
         self.frame_start += num_regs as usize;
         self.call_stack[self.stack_ptr] = self.code.offset();
@@ -165,6 +193,7 @@ impl<'a> Vm<'a> {
         self.code.set_offset(addr);
     }
 
+    #[inline]
     fn pop_frame(&mut self) {
         self.stack_ptr -= 1;
         self.code.set_offset(self.call_stack[self.stack_ptr]);
@@ -318,6 +347,10 @@ macro_rules! call_ops {
     ($($name:ident $($i:literal $arg:ident),*;)+) => {
         $(
         fn $name(vm: &mut Vm) {
+            if vm.check_stack_overflow() {
+                return;
+            }
+
             let addr = take!(vm, Addr);
 
             $(
@@ -372,8 +405,14 @@ macro_rules! dcall_ops {
     ($($name:ident $($num_args:literal)?;)+) => {
         $(
         fn $name(vm: &mut Vm) {
+            if vm.check_stack_overflow() {
+                return;
+            }
+
             let addr = load!(vm);
+
             $(let args = [(); $num_args].map(|_| load!(vm));)?
+
             let num_regs = take!(vm, Reg);
             vm.push_frame(num_regs, addr.as_int_unchecked() as usize);
 
@@ -415,12 +454,20 @@ fn dcallv(vm: &mut Vm) {
 }
 
 fn ret_r(vm: &mut Vm) {
+    if vm.check_stack_underflow() {
+        return;
+    }
+
     let ret = load!(vm);
     vm.pop_frame();
     *load!(mut vm) = ret;
 }
 
 fn ret_i(vm: &mut Vm) {
+    if vm.check_stack_underflow() {
+        return;
+    }
+
     let ret = take!(vm, Value);
     vm.pop_frame();
     *load!(mut vm) = ret;
@@ -495,46 +542,74 @@ fn arr_i(vm: &mut Vm) {
     vm.gc.run(&mut vm.registers);
 }
 
+macro_rules! check_bounds {
+    ($vm:ident, $ptr:ident, $idx:ident) => {{
+        #[cfg(feature = "check-bounds")]
+        if let Err(error) = $vm.gc.check_bounds($ptr, $idx) {
+            $vm.error = Some(error);
+            return;
+        }
+    }};
+}
+
 fn get_r(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
-    let idx = load!(vm).as_int_unchecked();
+    let idx = load!(vm).as_int_unchecked() as usize;
+
+    check_bounds!(vm, arr, idx);
+
     // TODO: passing -1 to this causes an overflow
-    *load!(mut vm) = vm.gc.get(arr, idx as usize);
+    *load!(mut vm) = vm.gc.get(arr, idx);
 }
 
 fn get_i(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
-    let idx = take!(vm, Int);
+    let idx = take!(vm, Int) as usize;
+
+    check_bounds!(vm, arr, idx);
+
     // TODO: passing -1 to this causes an overflow
-    *load!(mut vm) = vm.gc.get(arr, idx as usize);
+    *load!(mut vm) = vm.gc.get(arr, idx);
 }
 
 fn set_ii(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
-    let idx = take!(vm, Int);
+    let idx = take!(vm, Int) as usize;
     let val = take!(vm, Value);
-    *vm.gc.get_mut(arr, idx as usize) = val;
+
+    check_bounds!(vm, arr, idx);
+
+    *vm.gc.get_mut(arr, idx) = val;
 }
 
 fn set_rr(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
-    let idx = load!(vm).as_int_unchecked();
+    let idx = load!(vm).as_int_unchecked() as usize;
     let val = load!(vm);
-    *vm.gc.get_mut(arr, idx as usize) = val;
+
+    check_bounds!(vm, arr, idx);
+
+    *vm.gc.get_mut(arr, idx) = val;
 }
 
 fn set_ri(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
-    let idx = load!(vm).as_int_unchecked();
+    let idx = load!(vm).as_int_unchecked() as usize;
     let val = take!(vm, Value);
-    *vm.gc.get_mut(arr, idx as usize) = val;
+
+    check_bounds!(vm, arr, idx);
+
+    *vm.gc.get_mut(arr, idx) = val;
 }
 
 fn set_ir(vm: &mut Vm) {
     let arr = load!(vm).as_ptr_unchecked();
-    let idx = take!(vm, Int);
+    let idx = take!(vm, Int) as usize;
     let val = take!(vm, Value);
-    *vm.gc.get_mut(arr, idx as usize) = val;
+
+    check_bounds!(vm, arr, idx);
+
+    *vm.gc.get_mut(arr, idx) = val;
 }
 
 fn len(vm: &mut Vm) {

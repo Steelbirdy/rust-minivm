@@ -1,10 +1,6 @@
 use clap::Parser;
 use codespan_reporting::term::termcolor::ColorChoice;
-use rust_minivm::{
-    config::{Diagnostic, Process, RunConfig},
-    RuntimeError,
-    Value,
-};
+use rust_minivm::{config::{Diagnostic, Process, RunConfig}, Value, Error, VmDiagnostic};
 
 #[derive(Parser)]
 struct Cli {
@@ -14,27 +10,10 @@ struct Cli {
     debug: bool,
 }
 
-#[derive(Debug)]
-enum Error {
-    Diagnostics(Vec<Diagnostic>),
-    RuntimeError(RuntimeError),
-}
-
-impl From<Vec<Diagnostic>> for Error {
-    fn from(diagnostics: Vec<Diagnostic>) -> Self {
-        Error::Diagnostics(diagnostics)
-    }
-}
-
-impl From<RuntimeError> for Error {
-    fn from(err: RuntimeError) -> Self {
-        Error::RuntimeError(err)
-    }
-}
-
-fn run<'a>(process: &Process) -> Result<Value, Error> {
-    let (bytecode, gc) = rust_minivm::compile(process)?;
-    let ret = rust_minivm::run(bytecode.reader(), gc, process)?;
+fn run<'a>(process: &Process) -> Result<Value, Vec<Error>> {
+    let mut gc = rust_minivm::Gc::new();
+    let bytecode = rust_minivm::compile(process, &mut gc)?;
+    let ret = rust_minivm::run(bytecode.reader(), gc, process).map_err(|e| vec![e.into()])?;
     Ok(ret)
 }
 
@@ -49,11 +28,10 @@ fn run_from_file(path: &str, config: &RunConfig) {
         os_str.to_str().unwrap()
     };
     let process = Process::new(&contents, file_name, config);
-    let _ = match run(&process) {
-        Ok(value) => value,
-        Err(Error::Diagnostics(diagnostics)) => return display_diagnostics(diagnostics, &process),
-        Err(Error::RuntimeError(err)) => return display_runtime_error(err, &process),
-    };
+    if let Err(errors) = run(&process) {
+        let diagnostics = errors.into_iter().map(|e| e.to_diagnostic(&process)).collect();
+        display_diagnostics(diagnostics, &process);
+    }
 }
 
 fn display_diagnostics(diagnostics: Vec<Diagnostic>, process: &Process) {
@@ -69,10 +47,6 @@ fn display_diagnostics(diagnostics: Vec<Diagnostic>, process: &Process) {
             &diagnostic,
         ).unwrap();
     }
-}
-
-fn display_runtime_error(err: RuntimeError, process: &Process) {
-    todo!()
 }
 
 fn main() {
