@@ -14,4 +14,8 @@ pub type UInt = u64;
 pub type Reg = u16;
 pub type Addr = u32;
 
+pub const INT_MAX: Int = Int::MAX >> 1;
+pub const INT_MIN: Int = Int::MIN >> 1;
+
 pub type List<T> = smallvec::SmallVec<[T; 3]>;
+pub use smallvec::smallvec as list;

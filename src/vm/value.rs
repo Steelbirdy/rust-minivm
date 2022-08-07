@@ -53,6 +53,7 @@ impl Value {
     pub const PTR_MIN: Value = Value::ptr_unchecked(Ptr::MIN);
 
     #[must_use]
+    #[inline]
     pub fn int(value: Int) -> Self {
         assert!(Self::INT_MIN.as_int_unchecked() <= value);
         assert!(value <= Self::INT_MAX.as_int_unchecked());
@@ -60,6 +61,7 @@ impl Value {
     }
 
     #[must_use]
+    #[inline]
     pub fn ptr(ptr: Ptr) -> Self {
         assert!(Ptr::MIN.to_usize() <= ptr.to_usize());
         assert!(ptr.to_usize() <= Ptr::MAX.to_usize());
@@ -67,12 +69,14 @@ impl Value {
     }
 
     #[must_use]
+    #[inline]
     pub const fn int_unchecked(value: Int) -> Self {
         let bytes = (value << 1).to_le_bytes();
         Self(Repr::from_le_bytes(bytes))
     }
 
     #[must_use]
+    #[inline]
     pub const fn ptr_unchecked(ptr: Ptr) -> Self {
         let bytes = ((ptr.to_usize() << 1) | 1).to_le_bytes();
         Self(Repr::from_le_bytes(bytes))
@@ -80,6 +84,7 @@ impl Value {
 
     #[cfg(feature = "unsafe")]
     #[must_use]
+    #[inline]
     pub const fn kind(self) -> ValueKind {
         // SAFETY:
         // * The only possible values of (<int> & 1) are 0 and 1.
@@ -91,6 +96,7 @@ impl Value {
 
     #[cfg(not(feature = "unsafe"))]
     #[must_use]
+    #[inline]
     pub const fn kind(self) -> ValueKind {
         debug_assert!(ValueKind::Int as u8 == 0 && ValueKind::Ptr as u8 == 1);
 
@@ -102,26 +108,31 @@ impl Value {
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_int(self) -> bool {
         self.kind() as u8 == ValueKind::Int as u8
     }
 
     #[must_use]
+    #[inline]
     pub const fn is_ptr(self) -> bool {
         self.kind() as u8 == ValueKind::Ptr as u8
     }
 
     #[must_use]
+    #[inline]
     pub fn as_int(self) -> Int {
         self.try_as_int().unwrap()
     }
 
     #[must_use]
+    #[inline]
     pub fn as_ptr(self) -> Ptr {
         self.try_as_ptr().unwrap()
     }
 
     #[must_use]
+    #[inline]
     pub fn try_as_int(self) -> Option<Int> {
         if self.is_int() {
             Some(self.as_int_unchecked())
@@ -131,6 +142,7 @@ impl Value {
     }
 
     #[must_use]
+    #[inline]
     pub fn try_as_ptr(self) -> Option<Ptr> {
         if self.is_ptr() {
             Some(self.as_ptr_unchecked())
@@ -140,17 +152,20 @@ impl Value {
     }
 
     #[must_use]
+    #[inline]
     pub const fn as_int_unchecked(self) -> Int {
         let val = Int::from_le_bytes(self.0.to_le_bytes());
         val >> 1
     }
 
     #[must_use]
+    #[inline]
     pub const fn as_ptr_unchecked(self) -> Ptr {
         Ptr::from_le_bytes((self.0 >> 1).to_le_bytes())
     }
 
     #[must_use]
+    #[inline]
     pub fn into_raw(self) -> Repr {
         self.0
     }
@@ -162,6 +177,7 @@ macro_rules! impl_op {
         impl std::ops::$Trait<Value> for Value {
             type Output = Value;
 
+            #[inline]
             fn $func(self, rhs: Value) -> Value {
                 Value::int_unchecked(std::ops::$Trait::$func(self.as_int_unchecked(), rhs.as_int_unchecked()))
             }
@@ -170,6 +186,7 @@ macro_rules! impl_op {
         impl std::ops::$Trait<Int> for Value {
             type Output = Value;
 
+            #[inline]
             fn $func(self, rhs: Int) -> Value {
                 Value::int_unchecked(std::ops::$Trait::$func(self.as_int_unchecked(), rhs))
             }
@@ -178,6 +195,7 @@ macro_rules! impl_op {
         impl std::ops::$Trait<Value> for Int {
             type Output = Value;
 
+            #[inline]
             fn $func(self, rhs: Value) -> Value {
                 Value::int_unchecked(std::ops::$Trait::$func(self, rhs.as_int_unchecked()))
             }
@@ -195,12 +213,14 @@ impl_op![
 ];
 
 impl std::ops::AddAssign<Int> for Value {
+    #[inline]
     fn add_assign(&mut self, rhs: Int) {
         *self = Self::int_unchecked(self.as_int_unchecked() + rhs);
     }
 }
 
 impl std::ops::SubAssign<Int> for Value {
+    #[inline]
     fn sub_assign(&mut self, rhs: Int) {
         *self = Self::int_unchecked(self.as_int_unchecked() - rhs);
     }
@@ -209,42 +229,49 @@ impl std::ops::SubAssign<Int> for Value {
 impl std::ops::Neg for Value {
     type Output = Value;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         Self::int_unchecked(-self.as_int_unchecked())
     }
 }
 
 impl PartialEq<Value> for Value {
+    #[inline]
     fn eq(&self, other: &Value) -> bool {
         self.0 == other.0
     }
 }
 
 impl PartialEq<Int> for Value {
+    #[inline]
     fn eq(&self, other: &Int) -> bool {
         self.as_int_unchecked() == *other
     }
 }
 
 impl PartialEq<Value> for Int {
+    #[inline]
     fn eq(&self, other: &Value) -> bool {
         *self == other.as_int_unchecked()
     }
 }
 
 impl PartialOrd<Value> for Value {
+    #[inline]
     fn partial_cmp(&self, other: &Value) -> Option<Ordering> {
         Some(self.as_int_unchecked().cmp(&other.as_int_unchecked()))
     }
 }
 
 impl PartialOrd<Int> for Value {
+    #[inline]
     fn partial_cmp(&self, other: &Int) -> Option<Ordering> {
         Some(self.as_int_unchecked().cmp(other))
     }
 }
 
 impl PartialOrd<Value> for Int {
+    #[inline]
     fn partial_cmp(&self, other: &Value) -> Option<Ordering> {
         Some(self.cmp(&other.as_int_unchecked()))
     }

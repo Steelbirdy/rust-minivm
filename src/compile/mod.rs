@@ -1,6 +1,9 @@
 mod assembler;
 mod bytecode;
 mod debug;
+mod hir;
+mod error;
+mod lower_ast;
 
 pub use assembler::Assembler;
 pub use bytecode::Bytecode;
