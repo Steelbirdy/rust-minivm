@@ -7,62 +7,112 @@
 )]
 
 mod common;
-mod compile;
-mod parse;
+pub mod hir;
+pub mod lir;
+pub mod parse;
 mod vm;
 
-pub use common::config::Diagnostic;
-pub use common::{config, BytecodeReader, Interner};
-pub use compile::{assemble, disassemble as disassemble_bytecode};
-pub use parse::{lex, parse, validate};
-pub use vm::{disassemble as disassemble_opcode, lower_bytecode, trace_jumps, Gc, Value, Vm};
+pub use common::{
+    config::{self, Diagnostic, Process},
+    BytecodeReader, Interner,
+};
+pub use vm::{disassemble as disassemble_opcode, lower_lir, Gc, Value, Vm};
 
 use common::config::VmDiagnostic;
+use parse::{grammar, Parser};
 
-pub fn run(process: &config::Process) -> Result<Value, Vec<Diagnostic>> {
+pub type Result<T> = std::result::Result<T, Vec<Diagnostic>>;
+
+fn errors_to_diagnostics<T: VmDiagnostic>(
+    errors: impl IntoIterator<Item = T>,
+    process: &Process,
+) -> Vec<Diagnostic> {
+    errors
+        .into_iter()
+        .map(|err| err.to_diagnostic(process))
+        .collect()
+}
+
+#[must_use]
+pub fn lex(process: &Process) -> parse::Tokens {
+    parse::Tokens::tokenize(process.source)
+}
+
+pub fn parse(tokens: &parse::Tokens, process: &Process) -> Result<parse::SyntaxTree> {
+    let result = Parser::parse(process.source, tokens, grammar::assembly);
+    let (tree, errors) = result.into_parts();
+    if errors.is_empty() {
+        Ok(tree)
+    } else {
+        Err(errors_to_diagnostics(errors, process))
+    }
+}
+
+pub fn validate(tree: &parse::SyntaxTree, process: &Process) -> Result<()> {
+    parse::validate(tree).map_err(|errors| errors_to_diagnostics(errors, process))
+}
+
+pub fn build_hir(
+    tree: &parse::SyntaxTree,
+    interner: &mut Interner,
+    process: &Process,
+) -> Result<hir::Program> {
+    hir::LoweringContext::new(interner, tree)
+        .finish()
+        .map_err(|errors| errors_to_diagnostics(errors, process))
+}
+
+pub fn build_lir(
+    hir: &hir::Program,
+    interner: &Interner,
+    gc: &mut Gc,
+    _process: &Process,
+) -> Result<Vec<lir::Instruction>> {
+    Ok(lir::lower_hir(hir, gc, interner))
+}
+
+pub fn build_bytecode(lir: &[lir::Instruction], _process: &Process) -> Result<Box<[u8]>> {
+    Ok(vm::lower_lir(lir))
+}
+
+pub fn run(bytecode: BytecodeReader, gc: Gc, process: &Process) -> Result<Value> {
+    macro_rules! trace {
+        ($str:literal $(, $args:expr)* $(,)?) => {
+            #[cfg(feature = "trace-execution")]
+            println!($str, $($args),*)
+        };
+    }
+
+    trace!("=== EXECUTION ===");
+    let ret = Vm::new(bytecode, gc, &process.config).run();
+    trace!("===           ===");
+    Ok(ret)
+}
+
+pub fn compile_and_run(process: &Process) -> Result<Value> {
     let mut interner = Interner::new();
     let mut gc = Gc::new();
 
     // Parsing (source -> AST)
-    let parse_result = parse(process.source);
-    if parse_result.has_errors() {
-        return Err(parse_result
-            .errors()
-            .iter()
-            .map(|err| err.to_diagnostic(process))
-            .collect());
-    }
-    if let Err(errors) = validate(parse_result.syntax_tree()) {
-        return Err(errors
-            .iter()
-            .map(|err| err.to_diagnostic(process))
-            .collect());
-    }
+    let tokens = lex(process);
+    let tree = parse(&tokens, process)?;
+    validate(&tree, process)?;
 
-    // Assembly (AST -> bytecode)
-    let bytecode = assemble(parse_result.syntax_tree(), &mut interner);
+    // HIR Generation (AST -> HIR)
+    let hir_program = build_hir(&tree, &mut interner, process)?;
+
+    // LIR Generation (HIR -> LIR)
+    let lir_instructions = build_lir(&hir_program, &interner, &mut gc, process)?;
+
+    // Bytecode Generation (LIR -> Bytecode)
+    let bytecode = build_bytecode(&lir_instructions, process)?;
     let reader = BytecodeReader::new(&bytecode);
     if process.config.dump_bytecode {
         println!("=== BYTECODE ===");
-        println!("{}", disassemble_bytecode(reader));
+        println!("{}", disassemble_opcode(reader));
         println!("================\n");
     }
-    let jumps = trace_jumps(reader);
 
-    // Lowering (bytecode -> internal bytecode)
-    let opcode = lower_bytecode(reader, &jumps, &mut gc);
-    let reader = BytecodeReader::new(&opcode);
-    if process.config.dump_internal_bytecode {
-        println!("=== INTERNAL BYTECODE ===");
-        println!("{}", disassemble_opcode(reader));
-        println!("=========================\n");
-    }
-
-    // Run the VM
-    #[cfg(feature = "trace-execution")]
-    println!("=== EXECUTION ===");
-    let ret = Vm::new(reader, gc, &process.config).run();
-    #[cfg(feature = "trace-execution")]
-    println!("===           ===");
-    Ok(ret)
+    // Execution
+    run(reader, gc, process)
 }

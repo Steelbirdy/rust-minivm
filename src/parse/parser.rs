@@ -32,7 +32,7 @@ lazy_static::lazy_static! {
     ]);
 }
 
-pub(in crate::parse) fn assembly(p: &mut Parser) {
+pub(crate) fn assembly(p: &mut Parser) {
     let marker = p.start();
     while !p.is_at_end() {
         while p.is_at(TokenKind::LineBreak) {

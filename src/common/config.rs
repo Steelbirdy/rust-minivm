@@ -45,9 +45,7 @@ impl<'a> Process<'a> {
 #[derive(Debug, Copy, Clone)]
 pub struct RunConfig {
     pub dump_bytecode: bool,
-    pub dump_internal_bytecode: bool,
     pub trace_execution: bool,
-    pub print_output: bool,
 }
 
 pub type Diagnostic = codespan_reporting::diagnostic::Diagnostic<FileId>;

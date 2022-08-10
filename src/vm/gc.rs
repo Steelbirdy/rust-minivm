@@ -195,7 +195,7 @@ impl Gc {
         }
 
         for &mut reg in &mut *registers {
-            self.mark(reg)
+            self.mark(reg);
         }
 
         if self.buf_used > self.move_buf.len() {

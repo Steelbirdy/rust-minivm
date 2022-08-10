@@ -1,10 +1,5 @@
-use eventree_wrapper::{eventree::SyntaxKind, parser::SimpleTokens};
+use eventree_wrapper::eventree::SyntaxKind;
 use logos::Logos;
-
-#[must_use]
-pub fn lex(source: &str) -> SimpleTokens<TokenKind> {
-    SimpleTokens::tokenize(source)
-}
 
 #[derive(Logos, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(u8)]
@@ -107,6 +102,7 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         use TokenKind::*;
         match self {
@@ -174,18 +170,18 @@ unsafe impl SyntaxKind for TokenKind {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use expect_test::{expect, Expect};
     use std::fmt::Write;
 
     fn tokenize(source: &str) -> String {
-        lex(source)
-            .iter()
-            .fold(String::new(), |mut buf, (range, kind)| {
+        crate::parse::Tokens::tokenize(source).iter().fold(
+            String::new(),
+            |mut buf, (range, kind)| {
                 let (start, end) = (range.start(), range.end());
                 let _ = writeln!(buf, "{:?}@{}..{}", kind, u32::from(start), u32::from(end));
                 buf
-            })
+            },
+        )
     }
 
     fn check(source: &str, expect: Expect) {
@@ -335,12 +331,12 @@ mod tests {
 
     #[test]
     fn lex_putchar() {
-        check("putchar", expect!["Putchar@0..4"]);
+        check("putchar", expect!["Putc@0..7"]);
     }
 
     #[test]
     fn lex_reg() {
-        check("reg", expect!["Reg@0..4"]);
+        check("reg", expect!["Reg@0..3"]);
     }
 
     #[test]
@@ -426,7 +422,7 @@ Label@4..11
 Whitespace@11..12
 Label@12..15"
             ],
-        )
+        );
     }
 
     #[test]
@@ -460,8 +456,7 @@ Add@4..7"
             "# this is a comment\nadd",
             expect![
                 "\
-Comment@0..19
-LineBreak@19..20
+Comment@0..20
 Add@20..23"
             ],
         );

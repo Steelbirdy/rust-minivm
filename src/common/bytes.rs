@@ -44,19 +44,23 @@ pub struct BytecodeReader<'a> {
 }
 
 impl<'a> BytecodeReader<'a> {
+    #[must_use]
     pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
 
     #[inline]
+    #[must_use]
     pub fn offset(&self) -> usize {
         self.offset
     }
@@ -66,6 +70,7 @@ impl<'a> BytecodeReader<'a> {
         self.offset = offset;
     }
 
+    #[must_use]
     pub fn is_at_end(&self) -> bool {
         self.offset >= self.bytes.len()
     }
@@ -80,6 +85,7 @@ impl<'a> BytecodeReader<'a> {
 
     #[allow(unsafe_code)]
     #[inline]
+    #[must_use]
     pub fn read_at<T: AsBytes>(&self, offset: usize) -> T {
         #[cfg(not(feature = "unsafe"))]
         assert!(offset + size_of::<T>() <= self.bytes.len());
@@ -87,11 +93,13 @@ impl<'a> BytecodeReader<'a> {
     }
 
     #[inline]
+    #[must_use]
     pub fn read<T: AsBytes>(&self) -> T {
         self.read_at(self.offset)
     }
 
     #[inline]
+    #[must_use]
     pub fn take<T: AsBytes>(&mut self) -> T {
         let ret = self.read::<T>();
         self.offset += size_of::<T>();

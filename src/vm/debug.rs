@@ -65,9 +65,9 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
         Call6 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         Call7 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         Call8 => args!(Addr, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-        CallV => {
+        CallL => {
             let addr = Arg::Addr(code.take());
-            let num_args = code.take::<common::Int>();
+            let num_args = code.take::<u32>();
             write!(buf, " [{addr:?}, {num_args}").unwrap();
             for _ in 0..num_args + 2 {
                 write!(buf, ", {:?}", Arg::Reg(code.take())).unwrap();
@@ -84,9 +84,9 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
         DCall6 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         DCall7 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
         DCall8 => args!(Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg, Reg),
-        DCallV => {
+        DCallL => {
             let addr = Arg::Reg(code.take());
-            let num_args = code.take::<common::Int>();
+            let num_args = code.take::<u32>();
             write!(buf, " [{addr:?}, {num_args}").unwrap();
             for _ in 0..num_args + 2 {
                 write!(buf, ", {:?}", Arg::Reg(code.take())).unwrap();
@@ -94,7 +94,7 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
             // writeln!(buf, ", {:?}]", Arg::Reg(code.take().unwrap())).unwrap();
         }
         RetR => args!(Reg),
-        RetI => args!(Value),
+        RetV => args!(Value),
         Value => args!(Value, Reg),
         AddRR | SubRR | MulRR | DivRR | ModRR => args!(Reg, Reg, Reg),
         AddIR | SubIR | MulIR | DivIR | ModIR => args!(Value, Reg, Reg),
@@ -118,6 +118,7 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
     }
 }
 
+#[must_use]
 pub fn disassemble(mut code: BytecodeReader) -> String {
     let mut buf = String::new();
 

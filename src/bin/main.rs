@@ -19,7 +19,7 @@ fn run<'a>(
     config: RunConfig,
 ) -> (Process<'a>, Result<Value, Vec<Diagnostic>>) {
     let process = Process::new(source, file_name, config);
-    let ret = rust_minivm::run(&process);
+    let ret = rust_minivm::compile_and_run(&process);
     (process, ret)
 }
 
@@ -42,9 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Cli = Parser::parse();
     let run_config = RunConfig {
         dump_bytecode: args.debug,
-        dump_internal_bytecode: args.debug,
         trace_execution: args.debug,
-        print_output: args.debug,
     };
 
     let (process, out) = if let Some(path) = &args.file_path {

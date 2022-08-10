@@ -24,6 +24,7 @@ pub struct Vm<'a> {
 }
 
 impl<'a> Vm<'a> {
+    #[must_use]
     pub fn new(code: BytecodeReader<'a>, gc: Gc, config: &'a RunConfig) -> Self {
         Self {
             code,
@@ -93,7 +94,7 @@ impl<'a> Vm<'a> {
                 Opcode::Call6 => call6(self),
                 Opcode::Call7 => call7(self),
                 Opcode::Call8 => call8(self),
-                Opcode::CallV => callv(self),
+                Opcode::CallL => call_l(self),
                 Opcode::DJump => djump(self),
                 Opcode::DCall0 => dcall0(self),
                 Opcode::DCall1 => dcall1(self),
@@ -104,9 +105,9 @@ impl<'a> Vm<'a> {
                 Opcode::DCall6 => dcall6(self),
                 Opcode::DCall7 => dcall7(self),
                 Opcode::DCall8 => dcall8(self),
-                Opcode::DCallV => dcallv(self),
+                Opcode::DCallL => dcall_l(self),
                 Opcode::RetR => ret_r(self),
-                Opcode::RetI => ret_i(self),
+                Opcode::RetV => ret_i(self),
                 Opcode::Value => value(self),
                 Opcode::AddRR => add_rr(self),
                 Opcode::AddIR => add_ir(self),
@@ -210,36 +211,42 @@ fn reg_r(vm: &mut Vm) {
     *load!(mut vm) = load!(vm);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchnz(vm: &mut Vm) {
     let cond = load!(vm);
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(cond != 0) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn brancheq_rr(vm: &mut Vm) {
     let (lhs, rhs) = (load!(vm), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn brancheq_ir(vm: &mut Vm) {
     let (lhs, rhs) = (take!(vm, Value), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchlt_rr(vm: &mut Vm) {
     let (lhs, rhs) = (load!(vm), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchlt_ri(vm: &mut Vm) {
     let (lhs, rhs) = (load!(vm), take!(vm, Value));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchlt_ir(vm: &mut Vm) {
     let (lhs, rhs) = (take!(vm, Value), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
@@ -347,9 +354,9 @@ call_ops![
     call8 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6, 7 arg7, 8 arg8;
 ];
 
-fn callv(vm: &mut Vm) {
+fn call_l(vm: &mut Vm) {
     let addr = take!(vm, Addr);
-    let num_args = take!(vm, Int);
+    let num_args = take!(vm, u32);
     let mut args = Vec::with_capacity(num_args as usize);
     for _ in 0..num_args {
         args.push(load!(vm));
@@ -399,9 +406,9 @@ dcall_ops![
     dcall8 8;
 ];
 
-fn dcallv(vm: &mut Vm) {
+fn dcall_l(vm: &mut Vm) {
     let addr = load!(vm);
-    let num_args = take!(vm, Int);
+    let num_args = take!(vm, u32);
     let mut args = Vec::with_capacity(num_args as usize);
     for _ in 0..num_args {
         args.push(load!(vm));
