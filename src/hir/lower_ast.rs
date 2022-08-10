@@ -53,6 +53,13 @@ impl<'a> LoweringContext<'a> {
 
     fn discover_labels(&mut self, root: ast::Root) {
         for func in root.functions(self.tree) {
+            if let Some(name) = func.name(self.tree) {
+                if let Err(error) = self.define_label(name) {
+                    self.errors.push(error);
+                }
+            } else {
+                continue;
+            }
             self.discover_labels_in_function(func);
         }
     }
