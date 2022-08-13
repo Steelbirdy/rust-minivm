@@ -145,7 +145,7 @@ impl<'a> Vm<'a> {
 
     fn debug_next(&mut self) {
         self.code
-            .at_checkpoint(|code| disassemble_instruction(code, &mut self.buf));
+            .at_checkpoint(|code| disassemble_instruction(code, &mut self.buf, &mut self.gc));
         print!("{}", self.buf);
         self.buf.clear();
     }
@@ -322,21 +322,26 @@ binary_jump_op!(rr jumpne_rr !=);
 binary_jump_op!(ir jumpne_ir !=);
 
 macro_rules! call_ops {
-    ($($name:ident $($i:literal $arg:ident),*;)+) => {
+    ($($name:ident $($num_args:literal)?;)+) => {
         $(
+        #[allow(unsafe_code)]
         fn $name(vm: &mut Vm) {
             let addr = take!(vm, Addr);
 
             $(
-            let $arg = load!(vm);
-            )*
+            let args: [Value; $num_args] = std::array::from_fn(|_| load!(vm));
+            )?
 
             let num_regs = take!(vm, Reg);
             vm.push_frame(num_regs, addr as usize);
 
             $(
-            vm.registers[$i as usize + vm.frame_start] = $arg;
-            )*
+            assert!(vm.frame_start + $num_args + 1 <= vm.registers.len());
+            unsafe {
+                let registers = vm.registers.as_mut_ptr().add(vm.frame_start + 1);
+                std::ptr::copy_nonoverlapping(args.as_ptr(), registers, $num_args);
+            }
+            )?
         }
         )+
     };
@@ -344,28 +349,30 @@ macro_rules! call_ops {
 
 call_ops![
     call0;
-    call1 1 arg1;
-    call2 1 arg1, 2 arg2;
-    call3 1 arg1, 2 arg2, 3 arg3;
-    call4 1 arg1, 2 arg2, 3 arg3, 4 arg4;
-    call5 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5;
-    call6 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6;
-    call7 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6, 7 arg7;
-    call8 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6, 7 arg7, 8 arg8;
+    call1 1;
+    call2 2;
+    call3 3;
+    call4 4;
+    call5 5;
+    call6 6;
+    call7 7;
+    call8 8;
 ];
 
+#[allow(unsafe_code)]
 fn call_l(vm: &mut Vm) {
     let addr = take!(vm, Addr);
     let num_args = take!(vm, u32);
     let mut args = Vec::with_capacity(num_args as usize);
-    for _ in 0..num_args {
-        args.push(load!(vm));
-    }
+    args.resize_with(num_args as usize, || load!(vm));
+
     let num_regs = take!(vm, Reg);
     vm.push_frame(num_regs, addr as usize);
 
-    for i in 0..num_args {
-        vm.registers[i as usize + 1 + vm.frame_start] = args[i as usize];
+    assert!(vm.frame_start + 1 + num_args as usize <= vm.registers.len());
+    unsafe {
+        let registers = vm.registers.as_mut_ptr().add(vm.frame_start + 1);
+        std::ptr::copy_nonoverlapping(args.as_ptr(), registers, num_args as usize);
     }
 }
 

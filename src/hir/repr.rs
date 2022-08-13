@@ -1,11 +1,22 @@
-use crate::common::{list, Int, Key, List, Reg};
+use crate::{
+    common::{list, Int, Key, List, Reg},
+    hir::JumpSet,
+};
 use rustc_hash::FxHashMap;
+use std::cell::Cell;
 use text_size::TextRange;
 
 #[derive(Debug)]
 pub struct Program {
     pub functions: FxHashMap<Key, Function>,
-    pub labels: FxHashMap<Key, TextRange>,
+    pub labels: FxHashMap<Key, LabelInfo>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct LabelInfo {
+    pub range: TextRange,
+    pub func: Key,
+    pub index: usize,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -17,16 +28,26 @@ pub struct KeyWithRange {
 #[derive(Debug)]
 pub struct Function {
     pub name: KeyWithRange,
-    pub instructions: List<InstructionWithRange>,
+    pub instructions: Vec<InstructionWithRange>,
+    pub jumps: Vec<Cell<JumpSet>>,
+    pub regs_used: Reg,
+}
+
+impl Function {
+    pub fn instructions_and_jumps(&self) -> impl Iterator<Item = (&InstructionWithRange, JumpSet)> {
+        self.instructions
+            .iter()
+            .zip(self.jumps.iter().map(Cell::get))
+    }
 }
 
 #[derive(Default)]
-pub struct RegisterUse {
+pub struct RegisterUsage {
     pub initialized: List<Reg>,
     pub used: List<Reg>,
 }
 
-impl RegisterUse {
+impl RegisterUsage {
     pub fn new<const N: usize, const M: usize>(init: [Reg; N], used: [Reg; M]) -> Self {
         Self {
             initialized: List::from_iter(init),
@@ -132,32 +153,32 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    pub fn register_use(&self) -> RegisterUse {
+    pub fn register_use(&self) -> RegisterUsage {
         use Instruction::*;
 
         match self.clone() {
-            Exit | Label { .. } => RegisterUse::default(),
-            Reg { to, from } => RegisterUse::new([to], [from]),
+            Exit | Label { .. } => RegisterUsage::default(),
+            Reg { to, from } => RegisterUsage::new([to], [from]),
             Branch { kind, .. } => kind.register_use(),
             Jump { kind, .. } => kind.register_use(None),
-            Call { to, args, .. } => RegisterUse {
+            Call { to, args, .. } => RegisterUsage {
                 initialized: list![to],
                 used: args,
             },
-            Addr { to, .. } => RegisterUse::new([to], []),
+            Addr { to, .. } => RegisterUsage::new([to], []),
             DJump { kind, lbl } => kind.register_use(Some(lbl)),
             DCall { to, func, mut args } => {
                 args.push(func);
-                RegisterUse {
+                RegisterUsage {
                     initialized: list![to],
                     used: args,
                 }
             }
             Ret { arg } => arg.register_use([]),
-            Int { to, .. } | Str { to, .. } => RegisterUse::new([to], []),
+            Int { to, .. } | Str { to, .. } => RegisterUsage::new([to], []),
             Binary { to, args, .. } => args.register_use([to]),
-            Unary { to, arg, .. } => RegisterUse::new([to], [arg]),
-            Incr { reg } | Decr { reg } => RegisterUse::new([], [reg]),
+            Unary { to, arg, .. } => RegisterUsage::new([to], [arg]),
+            Incr { reg } | Decr { reg } => RegisterUsage::new([], [reg]),
             Arr { to, len } => len.register_use([to]),
             Get { to, arr, idx } => {
                 let mut ret = idx.register_use([to]);
@@ -165,7 +186,7 @@ impl Instruction {
                 ret
             }
             Set { arr, idx_and_val } => idx_and_val.register_use(arr),
-            Len { to, arr: obj } | Type { to, obj } => RegisterUse::new([to], [obj]),
+            Len { to, arr: obj } | Type { to, obj } => RegisterUsage::new([to], [obj]),
             Putc { arg } => arg.register_use([]),
         }
     }
@@ -178,10 +199,10 @@ pub enum UnaryArg {
 }
 
 impl UnaryArg {
-    fn register_use<const N: usize>(self, init: [Reg; N]) -> RegisterUse {
+    fn register_use<const N: usize>(self, init: [Reg; N]) -> RegisterUsage {
         match self {
-            Self::R(reg) => RegisterUse::new(init, [reg]),
-            Self::I(_) => RegisterUse::new(init, []),
+            Self::R(reg) => RegisterUsage::new(init, [reg]),
+            Self::I(_) => RegisterUsage::new(init, []),
         }
     }
 }
@@ -194,11 +215,11 @@ pub enum BinaryArgs {
 }
 
 impl BinaryArgs {
-    fn register_use<const N: usize>(self, init: [Reg; N]) -> RegisterUse {
+    fn register_use<const N: usize>(self, init: [Reg; N]) -> RegisterUsage {
         match self {
-            Self::RR(lhs, rhs) => RegisterUse::new(init, [lhs, rhs]),
-            Self::RI(lhs, _) => RegisterUse::new(init, [lhs]),
-            Self::IR(_, rhs) => RegisterUse::new(init, [rhs]),
+            Self::RR(lhs, rhs) => RegisterUsage::new(init, [lhs, rhs]),
+            Self::RI(lhs, _) => RegisterUsage::new(init, [lhs]),
+            Self::IR(_, rhs) => RegisterUsage::new(init, [rhs]),
         }
     }
 }
@@ -211,9 +232,9 @@ pub enum BranchKind {
 }
 
 impl BranchKind {
-    fn register_use(self) -> RegisterUse {
+    fn register_use(self) -> RegisterUsage {
         match self {
-            Self::Nz { cond } => RegisterUse::new([], [cond]),
+            Self::Nz { cond } => RegisterUsage::new([], [cond]),
             Self::Eq { args } | Self::Lt { args } => args.register_use([]),
         }
     }
@@ -231,10 +252,10 @@ pub enum JumpKind {
 }
 
 impl JumpKind {
-    fn register_use(self, lbl: Option<Reg>) -> RegisterUse {
+    fn register_use(self, lbl: Option<Reg>) -> RegisterUsage {
         let mut ret = match self {
-            Self::Unconditional => RegisterUse::default(),
-            Self::Ez { cond } | Self::Nz { cond } => RegisterUse::new([], [cond]),
+            Self::Unconditional => RegisterUsage::default(),
+            Self::Ez { cond } | Self::Nz { cond } => RegisterUsage::new([], [cond]),
             Self::Eq { args } | Self::Ne { args } | Self::Lt { args } | Self::Le { args } => {
                 args.register_use([])
             }
@@ -253,12 +274,12 @@ pub enum SetArgs {
 }
 
 impl SetArgs {
-    fn register_use(self, arr: Reg) -> RegisterUse {
+    fn register_use(self, arr: Reg) -> RegisterUsage {
         match self {
-            Self::RR(lhs, rhs) => RegisterUse::new([], [arr, lhs, rhs]),
-            Self::RI(lhs, _) => RegisterUse::new([], [arr, lhs]),
-            Self::IR(_, rhs) => RegisterUse::new([], [arr, rhs]),
-            Self::II(_, _) => RegisterUse::new([], [arr]),
+            Self::RR(lhs, rhs) => RegisterUsage::new([], [arr, lhs, rhs]),
+            Self::RI(lhs, _) => RegisterUsage::new([], [arr, lhs]),
+            Self::IR(_, rhs) => RegisterUsage::new([], [arr, rhs]),
+            Self::II(_, _) => RegisterUsage::new([], [arr]),
         }
     }
 }

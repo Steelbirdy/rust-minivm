@@ -1,6 +1,6 @@
 use crate::{
     common::{self, BytecodeReader},
-    vm::Opcode,
+    vm::{Gc, Opcode},
 };
 use std::fmt::{self, Write};
 
@@ -24,8 +24,10 @@ impl fmt::Debug for Arg {
     }
 }
 
-pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
+pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String, gc: &mut Gc) {
     use Opcode::*;
+
+    const LONGEST_INSTR_NAME: usize = 9;
 
     macro_rules! args {
         ($($ty:ident),* $(,)?) => {{
@@ -39,7 +41,7 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
     let offset = code.offset();
     let opcode = code.take::<Opcode>();
     let as_str = opcode.as_str();
-    let padding = " ".repeat(9 - as_str.len());
+    let padding = " ".repeat(LONGEST_INSTR_NAME - as_str.len());
     write!(buf, "{offset:>04} | {as_str}{padding}").unwrap();
 
     match opcode {
@@ -95,7 +97,15 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
         }
         RetR => args!(Reg),
         RetV => args!(Value),
-        Value => args!(Value, Reg),
+        Value => {
+            let val: crate::vm::Value = code.take();
+            let to = Arg::Reg(code.take());
+            writeln!(buf, " [{val:?}, {to:?}]").unwrap();
+            if let Some(ptr) = val.try_as_ptr() {
+                let array = gc.array(ptr);
+                writeln!(buf, "     | {val:?} = {array:?}").unwrap();
+            }
+        }
         AddRR | SubRR | MulRR | DivRR | ModRR => args!(Reg, Reg, Reg),
         AddIR | SubIR | MulIR | DivIR | ModIR => args!(Value, Reg, Reg),
         SubRI | DivRI | ModRI => args!(Reg, Value, Reg),
@@ -119,11 +129,11 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String) {
 }
 
 #[must_use]
-pub fn disassemble(mut code: BytecodeReader) -> String {
+pub fn disassemble(mut code: BytecodeReader, gc: &mut Gc) -> String {
     let mut buf = String::new();
 
     while !code.is_at_end() {
-        disassemble_instruction(&mut code, &mut buf);
+        disassemble_instruction(&mut code, &mut buf, gc);
     }
 
     buf.pop();

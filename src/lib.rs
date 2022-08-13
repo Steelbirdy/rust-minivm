@@ -8,7 +8,7 @@
 
 mod common;
 pub mod hir;
-pub mod lir;
+pub mod mir;
 pub mod parse;
 mod vm;
 
@@ -16,7 +16,7 @@ pub use common::{
     config::{self, Diagnostic, Process},
     BytecodeReader, Interner,
 };
-pub use vm::{disassemble as disassemble_opcode, lower_lir, Gc, Value, Vm};
+pub use vm::{disassemble as disassemble_opcode, lower_mir, Gc, Value, Vm};
 
 use common::config::VmDiagnostic;
 use parse::{grammar, Parser};
@@ -57,22 +57,22 @@ pub fn build_hir(
     interner: &mut Interner,
     process: &Process,
 ) -> Result<hir::Program> {
-    hir::LoweringContext::new(interner, tree)
+    hir::LoweringContext::new(tree, interner)
         .finish()
         .map_err(|errors| errors_to_diagnostics(errors, process))
 }
 
-pub fn build_lir(
+pub fn build_mir(
     hir: &hir::Program,
     interner: &Interner,
     gc: &mut Gc,
     _process: &Process,
-) -> Result<Vec<lir::Instruction>> {
-    Ok(lir::lower_hir(hir, gc, interner))
+) -> Result<Vec<mir::Instruction>> {
+    Ok(mir::lower_hir(hir, gc, interner))
 }
 
-pub fn build_bytecode(lir: &[lir::Instruction], _process: &Process) -> Result<Box<[u8]>> {
-    Ok(vm::lower_lir(lir))
+pub fn build_bytecode(mir: &[mir::Instruction], _process: &Process) -> Result<Box<[u8]>> {
+    Ok(vm::lower_mir(mir))
 }
 
 pub fn run(bytecode: BytecodeReader, gc: Gc, process: &Process) -> Result<Value> {
@@ -99,17 +99,17 @@ pub fn compile_and_run(process: &Process) -> Result<Value> {
     validate(&tree, process)?;
 
     // HIR Generation (AST -> HIR)
-    let hir_program = build_hir(&tree, &mut interner, process)?;
+    let program = build_hir(&tree, &mut interner, process)?;
 
-    // LIR Generation (HIR -> LIR)
-    let lir_instructions = build_lir(&hir_program, &interner, &mut gc, process)?;
+    // MIR Generation (HIR -> MIR)
+    let instructions = build_mir(&program, &interner, &mut gc, process)?;
 
-    // Bytecode Generation (LIR -> Bytecode)
-    let bytecode = build_bytecode(&lir_instructions, process)?;
+    // Bytecode Generation (MIR -> Bytecode)
+    let bytecode = build_bytecode(&instructions, process)?;
     let reader = BytecodeReader::new(&bytecode);
     if process.config.dump_bytecode {
         println!("=== BYTECODE ===");
-        println!("{}", disassemble_opcode(reader));
+        println!("{}", disassemble_opcode(reader, &mut gc));
         println!("================\n");
     }
 

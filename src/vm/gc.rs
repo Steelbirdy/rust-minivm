@@ -136,7 +136,6 @@ impl Gc {
         self.buf[ptr.0 - 1].header().size
     }
 
-    #[cfg(feature = "check-bounds")]
     #[must_use]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
         self.buf[ptr.0 - 1].header().len()
@@ -149,6 +148,16 @@ impl Gc {
             idx < len,
             "array index out of bounds: the length is {len} but the index is {idx}"
         );
+    }
+
+    #[allow(unsafe_code)]
+    #[must_use]
+    pub fn array(&self, ptr: Ptr) -> &[Value] {
+        let len = self.array_len_usize(ptr);
+        unsafe {
+            let heap_ptr = self.buf.as_ptr().add(ptr.0).cast::<Value>();
+            std::slice::from_raw_parts(heap_ptr, len)
+        }
     }
 
     #[must_use]

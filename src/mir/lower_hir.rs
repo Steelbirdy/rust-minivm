@@ -1,7 +1,7 @@
 use crate::{
     common::{Interner, Key, List, Reg},
-    hir,
-    lir::Instruction,
+    hir::{self, JumpSet},
+    mir::Instruction,
     vm::{Gc, Value},
 };
 use rustc_hash::FxHashMap;
@@ -18,85 +18,40 @@ enum BinaryArgs {
     VV(Value, Value),
 }
 
-struct Registers {
-    regs: Vec<RegState>,
-}
-
-impl Registers {
-    fn new() -> Self {
-        Self {
-            regs: Vec::with_capacity(16),
-        }
-    }
-
-    fn grow(&mut self, len: usize) {
-        if len <= self.regs.len() {
-            return;
-        }
-        self.regs.resize(len, RegState::default());
-    }
-
-    fn get(&mut self, reg: Reg) -> &mut RegState {
-        let reg = usize::from(reg);
-        self.grow(reg + 1);
-        &mut self.regs[reg]
-    }
-
-    fn reset(&mut self) {
-        for reg in &mut self.regs {
-            reg.reset();
-        }
-    }
-}
-
-#[derive(Default, Copy, Clone)]
-struct RegState {
-    value: Option<Value>,
-    in_scope: bool,
-}
-
-impl RegState {
-    fn is_named(&self) -> bool {
-        self.value.is_some()
-    }
-
-    fn name(&mut self, value: Value) {
-        self.value = Some(value);
-        self.in_scope = false;
-    }
-
-    fn reset(&mut self) {
-        self.value = None;
-        self.in_scope = false;
-    }
-}
-
 pub(crate) struct LoweringContext<'a> {
     gc: &'a mut Gc,
     interner: &'a Interner,
     out: Vec<Instruction>,
     label_locs: FxHashMap<Key, usize>,
     label_refs: FxHashMap<usize, List<Key>>,
-    regs: Registers,
+    regs_used: Reg,
 }
 
 macro_rules! lower_binary {
-    ($this:ident, $to:ident, $args:expr => ($rr:ident, $rv:ident, $vr:ident) |$lhs:ident, $rhs:ident| $vv:expr) => {
-        match $this.binary_args($args) {
+    ($this:ident, $to:ident, $args:expr => ($rr:ident, $rv:ident, $vr:ident) |$lhs:ident, $rhs:ident| $vv:expr) => {{
+        let args = $this.binary_args($args);
+        if let BinaryArgs::VV($lhs, $rhs) = args {
+            return $vv;
+        }
+        match args {
             BinaryArgs::RR(lhs, rhs) => write!($this; Instruction::$rr { lhs, rhs, to: $to }),
             BinaryArgs::RV(lhs, rhs) => write!($this; Instruction::$rv { lhs, rhs, to: $to }),
             BinaryArgs::VR(lhs, rhs) => write!($this; Instruction::$vr { lhs, rhs, to: $to }),
-            BinaryArgs::VV($lhs, $rhs) => $vv,
+            BinaryArgs::VV($lhs, $rhs) => unreachable!(),
         }
-    };
-    ($this:ident, $to:ident, $args:expr => ($rr:ident, $vr:ident) |$lhs:ident, $rhs:ident| $vv:expr) => {
-        match $this.binary_args($args) {
+    }};
+    ($this:ident, $to:ident, $args:expr => ($rr:ident, $vr:ident) |$lhs:ident, $rhs:ident| $vv:expr) => {{
+        let args = $this.binary_args($args);
+        if let BinaryArgs::VV($lhs, $rhs) = args {
+            return $vv;
+        }
+        match args {
             BinaryArgs::RR(lhs, rhs) => write!($this; Instruction::$rr { lhs, rhs, to: $to }),
             BinaryArgs::RV(lhs, rhs) => write!($this; Instruction::$vr { lhs: rhs, rhs: lhs, to: $to }),
             BinaryArgs::VR(lhs, rhs) => write!($this; Instruction::$vr { lhs, rhs, to: $to }),
-            BinaryArgs::VV($lhs, $rhs) => $vv,
+            BinaryArgs::VV($lhs, $rhs) => unreachable!(),
         }
-    };
+    }};
 }
 
 macro_rules! write {
@@ -113,30 +68,7 @@ impl<'a> LoweringContext<'a> {
             out: Vec::new(),
             label_locs: FxHashMap::default(),
             label_refs: FxHashMap::default(),
-            regs: Registers::new(),
-        }
-    }
-
-    fn name(&mut self, reg: Reg, value: Value) {
-        self.regs.get(reg).name(value);
-    }
-
-    fn named(&mut self, reg: Reg) -> Option<Value> {
-        self.regs.get(reg).value
-    }
-
-    fn clear_named(&mut self, reg: Reg) {
-        self.regs.get(reg).reset();
-    }
-
-    fn assign_if_named(&mut self, reg: Reg) {
-        let state = self.regs.get(reg);
-        if state.in_scope {
-            return;
-        }
-        if let Some(val) = state.value {
-            state.in_scope = true;
-            self.out.push(Instruction::Value { val, to: reg });
+            regs_used: Reg::MAX,
         }
     }
 
@@ -147,97 +79,54 @@ impl<'a> LoweringContext<'a> {
 
     fn unary_arg(&mut self, arg: hir::UnaryArg) -> UnaryArg {
         match arg {
-            hir::UnaryArg::R(reg) => {
-                if let Some(value) = self.named(reg) {
-                    UnaryArg::V(value)
-                } else {
-                    UnaryArg::R(reg)
-                }
-            }
+            hir::UnaryArg::R(reg) => UnaryArg::R(reg),
             hir::UnaryArg::I(int) => UnaryArg::V(Value::int(int)),
         }
     }
 
     fn binary_args(&mut self, args: hir::BinaryArgs) -> BinaryArgs {
         match args {
-            hir::BinaryArgs::RR(lhs, rhs) => match (self.named(lhs), self.named(rhs)) {
-                (Some(lhs), Some(rhs)) => BinaryArgs::VV(lhs, rhs),
-                (Some(lhs), None) => BinaryArgs::VR(lhs, rhs),
-                (None, Some(rhs)) => BinaryArgs::RV(lhs, rhs),
-                (None, None) => BinaryArgs::RR(lhs, rhs),
-            },
-            hir::BinaryArgs::RI(lhs, rhs) => {
-                let rhs = Value::int(rhs);
-                match self.named(lhs) {
-                    Some(lhs) => BinaryArgs::VV(lhs, rhs),
-                    None => BinaryArgs::RV(lhs, rhs),
-                }
-            }
-            hir::BinaryArgs::IR(lhs, rhs) => {
-                let lhs = Value::int(lhs);
-                match self.named(rhs) {
-                    Some(rhs) => BinaryArgs::VV(lhs, rhs),
-                    None => BinaryArgs::VR(lhs, rhs),
-                }
-            }
+            hir::BinaryArgs::RR(lhs, rhs) => BinaryArgs::RR(lhs, rhs),
+            hir::BinaryArgs::RI(lhs, rhs) => BinaryArgs::RV(lhs, Value::int(rhs)),
+            hir::BinaryArgs::IR(lhs, rhs) => BinaryArgs::VR(Value::int(lhs), rhs),
         }
     }
 
     fn set_args(&mut self, args: hir::SetArgs) -> BinaryArgs {
         match args {
-            hir::SetArgs::RR(lhs, rhs) => match (self.named(lhs), self.named(rhs)) {
-                (Some(lhs), Some(rhs)) => BinaryArgs::VV(lhs, rhs),
-                (Some(lhs), None) => BinaryArgs::VR(lhs, rhs),
-                (None, Some(rhs)) => BinaryArgs::RV(lhs, rhs),
-                (None, None) => BinaryArgs::RR(lhs, rhs),
-            },
-            hir::SetArgs::RI(lhs, rhs) => {
-                let rhs = Value::int(rhs);
-                match self.named(lhs) {
-                    Some(lhs) => BinaryArgs::VV(lhs, rhs),
-                    None => BinaryArgs::RV(lhs, rhs),
-                }
-            }
-            hir::SetArgs::IR(lhs, rhs) => {
-                let lhs = Value::int(lhs);
-                match self.named(rhs) {
-                    Some(rhs) => BinaryArgs::VV(lhs, rhs),
-                    None => BinaryArgs::VR(lhs, rhs),
-                }
-            }
+            hir::SetArgs::RR(lhs, rhs) => BinaryArgs::RR(lhs, rhs),
+            hir::SetArgs::RI(lhs, rhs) => BinaryArgs::RV(lhs, Value::int(rhs)),
+            hir::SetArgs::IR(lhs, rhs) => BinaryArgs::VR(Value::int(lhs), rhs),
             hir::SetArgs::II(lhs, rhs) => BinaryArgs::VV(Value::int(lhs), Value::int(rhs)),
         }
     }
 
     fn lower_function(&mut self, func: &hir::Function) {
-        self.regs.reset();
+        self.regs_used = func.regs_used;
 
         let start_idx = self.out.len();
         // TODO: Track the number of registers used by each function
         self.out.push(Instruction::Func {
             end: 0,
-            num_regs: 0,
+            num_regs: func.regs_used,
         });
         self.label_locs.insert(func.name.key, self.out.len());
 
-        for instr in &func.instructions {
-            self.lower_instruction(instr);
+        for (instr, jumps) in func.instructions_and_jumps() {
+            self.lower_instruction(instr, jumps);
         }
 
         let end_idx = self.out.len();
         match &mut self.out[start_idx] {
-            Instruction::Func { end, .. } => *end = end_idx,
+            Instruction::Func { end, .. } => {
+                *end = end_idx;
+            }
             _ => unreachable!(),
         }
     }
 
-    fn lower_instruction(&mut self, instr: &hir::InstructionWithRange) {
+    fn lower_instruction(&mut self, instr: &hir::InstructionWithRange, _jumps: JumpSet) {
         use hir::Instruction::*;
-
-        let reg_use = instr.inner.register_use();
-        for reg in reg_use.used {
-            self.assign_if_named(reg);
-        }
 
         match instr.inner.clone() {
             Exit => {
@@ -247,11 +136,7 @@ impl<'a> LoweringContext<'a> {
                 self.label_locs.insert(name.key, self.out.len());
             }
             Reg { to, from } => {
-                if let Some(value) = self.named(from) {
-                    self.name(to, value);
-                } else {
-                    write!(self; Instruction::RegR { from, to });
-                }
+                write!(self; Instruction::RegR { from, to });
             }
             Branch {
                 kind,
@@ -281,7 +166,7 @@ impl<'a> LoweringContext<'a> {
                 UnaryArg::V(val) => write!(self; Instruction::RetV { val }),
             },
             Int { to, int } => {
-                self.name(to, Value::int(int));
+                write!(self; Instruction::Value { val: Value::int(int), to });
             }
             Str { to, str } => {
                 let text = self.interner.lookup(str.key);
@@ -290,7 +175,7 @@ impl<'a> LoweringContext<'a> {
                 for (i, char) in text.chars().enumerate() {
                     *self.gc.get_mut(ptr, i) = Value::int(u32::from(char).into());
                 }
-                self.name(to, Value::ptr(ptr));
+                write!(self; Instruction::Value { val: Value::ptr(ptr), to });
             }
             Binary { to, op, args } => {
                 self.lower_binary(to, op, args);
@@ -299,44 +184,28 @@ impl<'a> LoweringContext<'a> {
                 self.lower_unary(to, op, arg);
             }
             Incr { reg } => {
-                if let Some(value) = self.named(reg) {
-                    self.name(reg, Value::int(value.as_int() + 1));
-                } else {
-                    write!(self; Instruction::Incr { reg });
-                }
+                write!(self; Instruction::Incr { reg });
             }
             Decr { reg } => {
-                if let Some(value) = self.named(reg) {
-                    self.name(reg, Value::int(value.as_int() - 1));
-                } else {
-                    write!(self; Instruction::Incr { reg });
-                }
+                write!(self; Instruction::Decr { reg });
             }
-            Arr { to, len } => {
-                self.clear_named(to);
-                match self.unary_arg(len) {
-                    UnaryArg::R(len) => write!(self; Instruction::ArrR { len, to }),
-                    UnaryArg::V(len) => write!(self; Instruction::ArrI { len: len.as_int(), to }),
+            Arr { to, len } => match self.unary_arg(len) {
+                UnaryArg::R(len) => write!(self; Instruction::ArrR { len, to }),
+                UnaryArg::V(len) => write!(self; Instruction::ArrI { len: len.as_int(), to }),
+            },
+            Get { to, arr, idx } => match self.unary_arg(idx) {
+                UnaryArg::R(idx) => write!(self; Instruction::GetR { arr, idx, to }),
+                UnaryArg::V(idx) => {
+                    write!(self; Instruction::GetI { arr, idx: idx.as_int(), to });
                 }
-            }
-            Get { to, arr, idx } => {
-                self.clear_named(to);
-                match self.unary_arg(idx) {
-                    UnaryArg::R(idx) => write!(self; Instruction::GetR { arr, idx, to }),
-                    UnaryArg::V(idx) => {
-                        write!(self; Instruction::GetI { arr, idx: idx.as_int(), to });
-                    }
-                }
-            }
+            },
             Set { arr, idx_and_val } => {
                 self.lower_set(arr, idx_and_val);
             }
             Len { to, arr } => {
-                self.clear_named(to);
                 write!(self; Instruction::Len { arr, to });
             }
             Type { to, obj } => {
-                self.clear_named(to);
                 write!(self; Instruction::Type { obj, to });
             }
             Putc { arg } => match self.unary_arg(arg) {
@@ -365,13 +234,7 @@ impl<'a> LoweringContext<'a> {
 
         match kind {
             hir::BranchKind::Nz { cond } => {
-                if let Some(cond) = self.named(cond) {
-                    let lbl = if cond == 0 { lbl_false } else { lbl_true };
-                    let addr = self.addr(lbl.key);
-                    write!(self; Instruction::Jump { addr });
-                } else {
-                    instr!(BranchNz, cond);
-                }
+                instr!(BranchNz, cond);
             }
             hir::BranchKind::Eq { args } => match self.binary_args(args) {
                 BinaryArgs::RR(lhs, rhs) => instr!(BranchEqRR, lhs, rhs),
@@ -415,24 +278,10 @@ impl<'a> LoweringContext<'a> {
         match kind {
             hir::JumpKind::Unconditional => instr!(Jump),
             hir::JumpKind::Ez { cond } => {
-                if let Some(cond) = self.named(cond) {
-                    if cond != 0 {
-                        return;
-                    }
-                    instr!(Jump);
-                } else {
-                    instr!(JumpEz, cond);
-                }
+                instr!(JumpEz, cond);
             }
             hir::JumpKind::Nz { cond } => {
-                if let Some(cond) = self.named(cond) {
-                    if cond == 0 {
-                        return;
-                    }
-                    instr!(Jump);
-                } else {
-                    instr!(JumpNz, cond);
-                }
+                instr!(JumpNz, cond);
             }
             hir::JumpKind::Eq { args } => match self.binary_args(args) {
                 BinaryArgs::RR(lhs, rhs) => instr!(JumpEqRR, lhs, rhs),
@@ -476,12 +325,8 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn lower_call(&mut self, to: Reg, func: hir::KeyWithRange, args: List<Reg>) {
-        self.clear_named(to);
-        for &arg in &args {
-            self.assign_if_named(arg);
-        }
         let addr = self.addr(func.key);
-        write!(self; Instruction::call(addr, args, 16, to));
+        write!(self; Instruction::call(addr, args, self.regs_used, to));
     }
 
     fn lower_djump(&mut self, kind: hir::JumpKind, lbl: Reg) {
@@ -492,52 +337,41 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn lower_dcall(&mut self, to: Reg, func: Reg, args: List<Reg>) {
-        self.clear_named(to);
-        for &arg in &args {
-            self.assign_if_named(arg);
-        }
-        write!(self; Instruction::dcall(func, args, 16, to));
+        write!(self; Instruction::dcall(func, args, self.regs_used, to));
     }
 
     fn lower_binary(&mut self, to: Reg, op: hir::BinaryOp, args: hir::BinaryArgs) {
         match op {
             hir::BinaryOp::Add => lower_binary!(self, to, args => (AddRR, AddIR) |lhs, rhs| {
                 assert!(lhs.is_int() && rhs.is_int(), "pointers cannot be used in math operations");
-                self.name(to, lhs + rhs);
+                write!(self; Instruction::Value { val: lhs + rhs, to });
             }),
             hir::BinaryOp::Sub => {
                 lower_binary!(self, to, args => (SubRR, SubRI, SubIR) |lhs, rhs| {
                     assert!(lhs.is_int() && rhs.is_int(), "pointers cannot be used in math operations");
-                    self.name(to, lhs - rhs);
+                    write!(self; Instruction::Value { val: lhs - rhs, to });
                 });
             }
             hir::BinaryOp::Mul => lower_binary!(self, to, args => (MulRR, MulIR) |lhs, rhs| {
                 assert!(lhs.is_int() && rhs.is_int(), "pointers cannot be used in math operations");
-                self.name(to, lhs * rhs);
+                write!(self; Instruction::Value { val: lhs * rhs, to });
             }),
             hir::BinaryOp::Div => {
                 lower_binary!(self, to, args => (DivRR, DivRI, DivIR) |lhs, rhs| {
                     assert!(lhs.is_int() && rhs.is_int(), "pointers cannot be used in math operations");
-                    self.name(to, lhs / rhs);
+                    write!(self; Instruction::Value { val: lhs / rhs, to });
                 });
             }
             hir::BinaryOp::Mod => {
                 lower_binary!(self, to, args => (ModRR, ModRI, ModIR) |lhs, rhs| {
                     assert!(lhs.is_int() && rhs.is_int(), "pointers cannot be used in math operations");
-                    self.name(to, lhs % rhs);
+                    write!(self; Instruction::Value { val: lhs % rhs, to });
                 });
             }
         }
     }
 
     fn lower_unary(&mut self, to: Reg, op: hir::UnaryOp, arg: Reg) {
-        if let Some(arg) = self.named(arg) {
-            assert!(arg.is_int(), "pointers cannot be used in math operations");
-            self.name(to, -arg);
-            return;
-        }
-
-        self.clear_named(to);
         match op {
             hir::UnaryOp::Neg => write!(self; Instruction::Neg { reg: arg, to }),
         }

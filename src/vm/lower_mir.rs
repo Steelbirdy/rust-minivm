@@ -1,14 +1,14 @@
 use crate::{
     common::{Addr, BytecodeBuilder},
-    lir::Instruction,
+    mir::Instruction,
     vm::Opcode,
 };
 
-type TypedBcIdx = usize;
-type UntypedBcIdx = usize;
+type HirIndex = usize;
+type MirIndex = usize;
 
 #[must_use]
-pub fn lower_lir(instructions: &[Instruction]) -> Box<[u8]> {
+pub fn lower_mir(instructions: &[Instruction]) -> Box<[u8]> {
     let mut ctx = LoweringContext::new(instructions);
     ctx.finish();
     ctx.patch_references();
@@ -18,8 +18,8 @@ pub fn lower_lir(instructions: &[Instruction]) -> Box<[u8]> {
 struct LoweringContext<'a> {
     instructions: &'a [Instruction],
     builder: BytecodeBuilder,
-    instr_starts: Vec<UntypedBcIdx>,
-    instr_refs: Vec<(UntypedBcIdx, TypedBcIdx)>,
+    instr_starts: Vec<MirIndex>,
+    instr_refs: Vec<(MirIndex, HirIndex)>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -32,7 +32,7 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn addr(&mut self, typed_idx: TypedBcIdx) {
+    fn addr(&mut self, typed_idx: HirIndex) {
         self.instr_refs.push((self.builder.len(), typed_idx));
         self.builder.push(Addr::MAX);
     }

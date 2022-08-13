@@ -1,30 +1,36 @@
-use crate::hir::{BinaryOp, BranchKind, JumpKind, SetArgs, UnaryArg, UnaryOp};
 use crate::{
     common::{self, Int, Key, List, Reg},
     config,
-    hir::{self, BinaryArgs, Function, HirError, HirErrorKind, Instruction, KeyWithRange, Program},
+    hir::{
+        BinaryArgs, BinaryOp, BranchKind, Function, HirError, HirErrorKind, Instruction,
+        InstructionWithRange, JumpKind, JumpSet, KeyWithRange, LabelInfo, Program, SetArgs,
+        UnaryArg, UnaryOp,
+    },
     parse::{ast, SyntaxTree},
     Interner,
 };
 use eventree_wrapper::syntax_tree::{AstNode, AstToken};
 use rustc_hash::FxHashMap;
+use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use text_size::{TextRange, TextSize};
 
 pub struct LoweringContext<'a> {
-    interner: &'a mut Interner,
     tree: &'a SyntaxTree,
-    labels_defined: FxHashMap<Key, TextRange>,
+    interner: &'a mut Interner,
+    labels: FxHashMap<Key, LabelInfo>,
     errors: List<HirError>,
+    regs_used: Reg,
 }
 
 impl<'a> LoweringContext<'a> {
-    pub fn new(interner: &'a mut Interner, tree: &'a SyntaxTree) -> Self {
+    pub fn new(tree: &'a SyntaxTree, interner: &'a mut Interner) -> Self {
         Self {
-            interner,
             tree,
-            labels_defined: FxHashMap::default(),
+            interner,
+            labels: FxHashMap::default(),
             errors: List::new(),
+            regs_used: 1,
         }
     }
 
@@ -38,10 +44,17 @@ impl<'a> LoweringContext<'a> {
             .map(|func| (func.name.key, func))
             .collect();
 
-        let labels = self.labels_defined;
+        let labels = self.labels;
+
+        assert!(
+            labels.values().all(|info| info.index != usize::MAX),
+            "label was not indexed"
+        );
 
         if self.errors.is_empty() {
-            Ok(Program { functions, labels })
+            let program = Program { functions, labels };
+            program.trace_jumps();
+            Ok(program)
         } else {
             Err(self.errors)
         }
@@ -51,55 +64,68 @@ impl<'a> LoweringContext<'a> {
         self.errors.push(error);
     }
 
+    fn get_key(&mut self, lbl: ast::Label) -> Key {
+        self.interner.intern(lbl.text(self.tree))
+    }
+
     fn discover_labels(&mut self, root: ast::Root) {
         for func in root.functions(self.tree) {
-            if let Some(name) = func.name(self.tree) {
-                if let Err(error) = self.define_label(name) {
-                    self.errors.push(error);
-                }
-            } else {
-                continue;
-            }
             self.discover_labels_in_function(func);
         }
     }
 
     fn discover_labels_in_function(&mut self, func: ast::Function) {
+        let func_name = match func.name(self.tree) {
+            Some(lbl) => {
+                let func = self.get_key(lbl);
+                self.define_label(lbl, func);
+                self.mark_label_index(func, 0);
+                func
+            }
+            None => return,
+        };
         for instr in func.instructions(self.tree) {
             if let ast::Instruction::Label(label_def) = instr {
-                let name = match label_def.name(self.tree) {
-                    Some(n) => n,
-                    None => continue,
-                };
-                if let Err(error) = self.define_label(name) {
-                    self.errors.push(error);
+                if let Some(name) = label_def.name(self.tree) {
+                    self.define_label(name, func_name);
                 }
             }
         }
     }
 
-    fn define_label(&mut self, lbl: ast::Label) -> Result<KeyWithRange, HirError> {
+    fn define_label(&mut self, lbl: ast::Label, func: Key) -> Option<KeyWithRange> {
         let key = self.interner.intern(lbl.text(self.tree));
         let range = lbl.range(self.tree);
-        match self.labels_defined.entry(key) {
+        match self.labels.entry(key) {
             Entry::Vacant(vacant) => {
-                vacant.insert(range);
-                Ok(KeyWithRange { key, range })
+                vacant.insert(LabelInfo {
+                    range,
+                    func,
+                    index: usize::MAX,
+                });
+                Some(KeyWithRange { key, range })
             }
             Entry::Occupied(occupied) => {
-                let first = *occupied.get();
-                Err(HirError {
-                    kind: HirErrorKind::DuplicateName { original: first },
+                let first = occupied.get();
+                self.errors.push(HirError {
+                    kind: HirErrorKind::DuplicateName {
+                        original: first.range,
+                    },
                     range,
-                })
+                });
+                None
             }
         }
     }
-}
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct LabelInfo {
-    range: TextRange,
+    fn mark_label_index(&mut self, lbl: Key, index: usize) {
+        match self.labels.entry(lbl) {
+            Entry::Vacant(_) => panic!("error in `lower_ast`: label not discovered"),
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().index = index;
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -198,7 +224,10 @@ impl Lower for ast::Register {
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let reg = self.text(ctx.tree)[1..].parse::<Reg>().ok();
         match reg {
-            Some(reg) if usize::try_from(reg).unwrap() < config::NUM_REGISTERS => Some(reg),
+            Some(reg) if usize::try_from(reg).unwrap() < config::NUM_REGISTERS_PER_FRAME => {
+                ctx.regs_used = ctx.regs_used.max(reg + 1);
+                Some(reg)
+            }
             _ => {
                 ctx.error(HirError {
                     kind: HirErrorKind::RegOutOfRange,
@@ -216,7 +245,7 @@ impl Lower for ast::Label {
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let name = self.text(ctx.tree);
         let key = ctx.interner.intern(name);
-        let ret = ctx.labels_defined.get(&key).map(|_| key);
+        let ret = ctx.labels.get(&key).map(|_| key);
         if ret.is_none() {
             ctx.error(HirError {
                 kind: HirErrorKind::UndefinedName,
@@ -268,21 +297,58 @@ impl Lower for ast::Function {
     type Output = Function;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
+        ctx.regs_used = 0;
+
         let name = lower!(self, ctx; name);
-        let instructions = self
-            .instructions(ctx.tree)
-            .map(|instr| instr.lower(ctx))
+        let dummy_label = InstructionWithRange {
+            inner: Instruction::Label { name },
+            range: name.range,
+        };
+        let body = self.instructions(ctx.tree).enumerate().map(|(i, instr)| {
+            let indexed = Indexed {
+                index: i,
+                value: instr,
+            };
+            indexed.lower(ctx)
+        });
+
+        let instructions: Vec<_> = std::iter::once(Some(dummy_label))
+            .chain(body)
             .collect::<Option<_>>()?;
-        Some(Function { name, instructions })
+        let mut jumps = Vec::with_capacity(instructions.len());
+        jumps.resize(jumps.capacity(), Cell::new(JumpSet::EMPTY));
+
+        Some(Function {
+            name,
+            instructions,
+            jumps,
+            regs_used: ctx.regs_used,
+        })
     }
 }
 
-impl Lower for ast::Instruction {
-    type Output = hir::InstructionWithRange;
+struct Indexed<T> {
+    index: usize,
+    value: T,
+}
+
+impl Lower for Indexed<ast::Instruction> {
+    type Output = InstructionWithRange;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
-        let inner = match self {
-            ast::Instruction::Label(instr) => instr.lower(ctx),
+        let Indexed {
+            index,
+            value: instr,
+        } = self;
+
+        let inner = match instr {
+            ast::Instruction::Label(instr) => {
+                let indexed = Indexed {
+                    index,
+                    value: instr,
+                };
+                indexed.lower(ctx)
+            }
             ast::Instruction::Add(instr) => instr.lower(ctx),
             ast::Instruction::Addr(instr) => instr.lower(ctx),
             ast::Instruction::Arr(instr) => instr.lower(ctx),
@@ -317,18 +383,20 @@ impl Lower for ast::Instruction {
             ast::Instruction::Sub(instr) => instr.lower(ctx),
             ast::Instruction::Type(instr) => instr.lower(ctx),
         }?;
-        Some(hir::InstructionWithRange {
+        Some(InstructionWithRange {
             inner,
-            range: self.range(ctx.tree),
+            range: instr.range(ctx.tree),
         })
     }
 }
 
-impl Lower for ast::LabelDef {
+impl Lower for Indexed<ast::LabelDef> {
     type Output = Instruction;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
-        let name = lower!(self, ctx; name);
+        let Indexed { index, value: defn } = self;
+        let name = lower!(defn, ctx; name);
+        ctx.mark_label_index(name.key, index);
         Some(Instruction::Label { name })
     }
 }
