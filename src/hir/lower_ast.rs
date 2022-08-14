@@ -41,7 +41,7 @@ impl<'a> LoweringContext<'a> {
         let functions: FxHashMap<_, _> = root
             .functions(self.tree)
             .filter_map(|func| func.lower(&mut self))
-            .map(|func| (func.name.key, func))
+            .map(|func| (func.name.value, func))
             .collect();
 
         let labels = self.labels;
@@ -103,7 +103,7 @@ impl<'a> LoweringContext<'a> {
                     func,
                     index: usize::MAX,
                 });
-                Some(KeyWithRange { key, range })
+                Some(KeyWithRange { value: key, range })
             }
             Entry::Occupied(occupied) => {
                 let first = occupied.get();
@@ -253,7 +253,7 @@ impl Lower for ast::Label {
             });
         }
         Some(KeyWithRange {
-            key,
+            value: key,
             range: self.range(ctx.tree),
         })
     }
@@ -301,7 +301,7 @@ impl Lower for ast::Function {
 
         let name = lower!(self, ctx; name);
         let dummy_label = InstructionWithRange {
-            inner: Instruction::Label { name },
+            value: Instruction::Label { name },
             range: name.range,
         };
         let body = self.instructions(ctx.tree).enumerate().map(|(i, instr)| {
@@ -341,7 +341,7 @@ impl Lower for Indexed<ast::Instruction> {
             value: instr,
         } = self;
 
-        let inner = match instr {
+        let value = match instr {
             ast::Instruction::Label(instr) => {
                 let indexed = Indexed {
                     index,
@@ -384,7 +384,7 @@ impl Lower for Indexed<ast::Instruction> {
             ast::Instruction::Type(instr) => instr.lower(ctx),
         }?;
         Some(InstructionWithRange {
-            inner,
+            value,
             range: instr.range(ctx.tree),
         })
     }
@@ -396,7 +396,7 @@ impl Lower for Indexed<ast::LabelDef> {
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let Indexed { index, value: defn } = self;
         let name = lower!(defn, ctx; name);
-        ctx.mark_label_index(name.key, index);
+        ctx.mark_label_index(name.value, index);
         Some(Instruction::Label { name })
     }
 }
@@ -1105,7 +1105,7 @@ impl Lower for ast::InstrStr {
         let str = ctx.interner.intern(&text);
         Some(Instruction::Str {
             to,
-            str: KeyWithRange { key: str, range },
+            str: KeyWithRange { value: str, range },
         })
     }
 }

@@ -28,7 +28,7 @@ impl Program {
 
         let func = &self.functions[&name];
         for (i, instr) in func.instructions.iter().enumerate() {
-            match &instr.inner {
+            match &instr.value {
                 Exit => {
                     self.add_flag(name, i, JumpFlag::Out);
                 }
@@ -38,12 +38,12 @@ impl Program {
                     ..
                 } => {
                     self.add_flag(name, i, JumpFlag::Out);
-                    self.add_flag_to_label(lbl_false.key, JumpFlag::In);
-                    self.add_flag_to_label(lbl_true.key, JumpFlag::In);
+                    self.add_flag_to_label(lbl_false.value, JumpFlag::In);
+                    self.add_flag_to_label(lbl_true.value, JumpFlag::In);
                 }
                 Jump { lbl, .. } => {
                     self.add_flag(name, i, JumpFlag::Out);
-                    self.add_flag_to_label(lbl.key, JumpFlag::In);
+                    self.add_flag_to_label(lbl.value, JumpFlag::In);
                 }
                 Ret { .. } => {
                     self.add_flag(name, i, JumpFlag::Out);

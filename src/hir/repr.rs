@@ -6,6 +6,12 @@ use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use text_size::TextRange;
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Tr<T> {
+    pub value: T,
+    pub range: TextRange,
+}
+
 #[derive(Debug)]
 pub struct Program {
     pub functions: FxHashMap<Key, Function>,
@@ -19,11 +25,7 @@ pub struct LabelInfo {
     pub index: usize,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct KeyWithRange {
-    pub key: Key,
-    pub range: TextRange,
-}
+pub type KeyWithRange = Tr<Key>;
 
 #[derive(Debug)]
 pub struct Function {
@@ -56,11 +58,7 @@ impl RegisterUsage {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct InstructionWithRange {
-    pub inner: Instruction,
-    pub range: TextRange,
-}
+pub type InstructionWithRange = Tr<Instruction>;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Instruction {

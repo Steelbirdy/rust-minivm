@@ -110,7 +110,7 @@ impl<'a> LoweringContext<'a> {
             end: 0,
             num_regs: func.regs_used,
         });
-        self.label_locs.insert(func.name.key, self.out.len());
+        self.label_locs.insert(func.name.value, self.out.len());
 
         for (instr, jumps) in func.instructions_and_jumps() {
             self.lower_instruction(instr, jumps);
@@ -128,12 +128,12 @@ impl<'a> LoweringContext<'a> {
     fn lower_instruction(&mut self, instr: &hir::InstructionWithRange, _jumps: JumpSet) {
         use hir::Instruction::*;
 
-        match instr.inner.clone() {
+        match instr.value.clone() {
             Exit => {
                 write!(self; Instruction::Exit);
             }
             Label { name } => {
-                self.label_locs.insert(name.key, self.out.len());
+                self.label_locs.insert(name.value, self.out.len());
             }
             Reg { to, from } => {
                 write!(self; Instruction::RegR { from, to });
@@ -152,7 +152,7 @@ impl<'a> LoweringContext<'a> {
                 self.lower_call(to, func, args);
             }
             Addr { to, lbl } => {
-                let addr = self.addr(lbl.key);
+                let addr = self.addr(lbl.value);
                 write!(self; Instruction::RegA { addr, to });
             }
             DJump { kind, lbl } => {
@@ -169,7 +169,7 @@ impl<'a> LoweringContext<'a> {
                 write!(self; Instruction::Value { val: Value::int(int), to });
             }
             Str { to, str } => {
-                let text = self.interner.lookup(str.key);
+                let text = self.interner.lookup(str.value);
                 let num_chars = text.len();
                 let ptr = self.gc.alloc(num_chars.try_into().unwrap());
                 for (i, char) in text.chars().enumerate() {
@@ -226,8 +226,8 @@ impl<'a> LoweringContext<'a> {
     ) {
         macro_rules! instr {
             ($kind:ident, $($cond:ident),+) => {{
-                let addr_f = self.addr(lbl_false.key);
-                let addr_t = self.addr(lbl_true.key);
+                let addr_f = self.addr(lbl_false.value);
+                let addr_t = self.addr(lbl_true.value);
                 write!(self; Instruction::$kind { $($cond,)+ addr_f, addr_t })
             }};
         }
@@ -244,7 +244,7 @@ impl<'a> LoweringContext<'a> {
                 }
                 BinaryArgs::VV(lhs, rhs) => {
                     let lbl = if lhs == rhs { lbl_true } else { lbl_false };
-                    let addr = self.addr(lbl.key);
+                    let addr = self.addr(lbl.value);
                     write!(self; Instruction::Jump { addr });
                 }
             },
@@ -260,7 +260,7 @@ impl<'a> LoweringContext<'a> {
                 }
                 BinaryArgs::VV(lhs, rhs) => {
                     let lbl = if lhs < rhs { lbl_true } else { lbl_false };
-                    let addr = self.addr(lbl.key);
+                    let addr = self.addr(lbl.value);
                     write!(self; Instruction::Jump { addr });
                 }
             },
@@ -270,7 +270,7 @@ impl<'a> LoweringContext<'a> {
     fn lower_jump(&mut self, kind: hir::JumpKind, lbl: hir::KeyWithRange) {
         macro_rules! instr {
             ($kind:ident $(, $cond:ident)*) => {{
-                let addr = self.addr(lbl.key);
+                let addr = self.addr(lbl.value);
                 write!(self; Instruction::$kind { $($cond,)* addr })
             }};
         }
@@ -325,7 +325,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn lower_call(&mut self, to: Reg, func: hir::KeyWithRange, args: List<Reg>) {
-        let addr = self.addr(func.key);
+        let addr = self.addr(func.value);
         write!(self; Instruction::call(addr, args, self.regs_used, to));
     }
 
