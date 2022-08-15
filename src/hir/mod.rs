@@ -10,7 +10,7 @@ pub use tracing::{JumpSet, Jumps};
 
 pub(crate) use lower_ast::LoweringContext;
 pub(crate) use repr::{
-    BinaryArgs, BinaryOp, BranchKind, Function, Instruction, InstructionWithRange, JumpKind,
+    BinaryArgs, BinaryOp, BranchKind, Function, Instruction, InstructionKind, JumpKind,
     KeyWithRange, LabelInfo, SetArgs, UnaryArg, UnaryOp,
 };
 pub(crate) use visit::Visit;

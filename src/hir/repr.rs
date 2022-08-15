@@ -3,7 +3,6 @@ use crate::{
     hir::JumpSet,
 };
 use rustc_hash::FxHashMap;
-use std::cell::Cell;
 use text_size::TextRange;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -30,17 +29,8 @@ pub type KeyWithRange = Tr<Key>;
 #[derive(Debug)]
 pub struct Function {
     pub name: KeyWithRange,
-    pub instructions: Vec<InstructionWithRange>,
-    pub jumps: Vec<Cell<JumpSet>>,
+    pub instructions: Vec<Instruction>,
     pub regs_used: Reg,
-}
-
-impl Function {
-    pub fn instructions_and_jumps(&self) -> impl Iterator<Item = (&InstructionWithRange, JumpSet)> {
-        self.instructions
-            .iter()
-            .zip(self.jumps.iter().map(Cell::get))
-    }
 }
 
 #[derive(Default)]
@@ -58,10 +48,25 @@ impl RegisterUsage {
     }
 }
 
-pub type InstructionWithRange = Tr<Instruction>;
+#[derive(Debug, PartialEq, Clone)]
+pub struct Instruction {
+    pub kind: InstructionKind,
+    pub range: TextRange,
+    pub jumps: JumpSet,
+}
+
+impl Instruction {
+    pub fn new(kind: InstructionKind, range: TextRange) -> Self {
+        Self {
+            kind,
+            range,
+            jumps: JumpSet::EMPTY,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum Instruction {
+pub enum InstructionKind {
     Exit,
     Label {
         name: KeyWithRange,
@@ -150,9 +155,9 @@ pub enum Instruction {
     },
 }
 
-impl Instruction {
+impl InstructionKind {
     pub fn register_use(&self) -> RegisterUsage {
-        use Instruction::*;
+        use InstructionKind::*;
 
         match self.clone() {
             Exit | Label { .. } => RegisterUsage::default(),

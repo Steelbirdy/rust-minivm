@@ -104,9 +104,8 @@ impl<'a> LoweringContext<'a> {
         self.label_locs.insert(func.name.value, self.out.len());
 
         let mut lower_instr = LowerInstruction::new(self, func);
-        for (instr, jumps) in func.instructions_and_jumps() {
-            lower_instr.jumps = jumps;
-            lower_instr.lower(&instr.value);
+        for instr in &func.instructions {
+            lower_instr.lower(instr);
         }
 
         let end_idx = self.out.len();
@@ -158,7 +157,8 @@ impl<'ctx, 'a> LowerInstruction<'ctx, 'a> {
     }
 
     fn lower(&mut self, instr: &hir::Instruction) {
-        hir::Visit::visit(self, instr);
+        self.jumps = instr.jumps;
+        hir::Visit::visit(self, &instr.kind);
     }
 
     fn addr(&mut self, key: Key) -> usize {

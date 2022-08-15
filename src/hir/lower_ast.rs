@@ -3,15 +3,13 @@ use crate::{
     config,
     hir::{
         BinaryArgs, BinaryOp, BranchKind, Function, HirError, HirErrorKind, Instruction,
-        InstructionWithRange, JumpKind, JumpSet, KeyWithRange, LabelInfo, Program, SetArgs,
-        UnaryArg, UnaryOp,
+        InstructionKind, JumpKind, KeyWithRange, LabelInfo, Program, SetArgs, UnaryArg, UnaryOp,
     },
     parse::{ast, SyntaxTree},
     Interner,
 };
 use eventree_wrapper::syntax_tree::{AstNode, AstToken};
 use rustc_hash::FxHashMap;
-use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use text_size::{TextRange, TextSize};
 
@@ -52,7 +50,7 @@ impl<'a> LoweringContext<'a> {
         );
 
         if self.errors.is_empty() {
-            let program = Program { functions, labels };
+            let mut program = Program { functions, labels };
             program.trace_jumps();
             Ok(program)
         } else {
@@ -300,10 +298,7 @@ impl Lower for ast::Function {
         ctx.regs_used = 0;
 
         let name = lower!(self, ctx; name);
-        let dummy_label = InstructionWithRange {
-            value: Instruction::Label { name },
-            range: name.range,
-        };
+        let dummy_label = Instruction::new(InstructionKind::Label { name }, name.range);
         let body = self.instructions(ctx.tree).enumerate().map(|(i, instr)| {
             let indexed = Indexed {
                 index: i,
@@ -315,13 +310,10 @@ impl Lower for ast::Function {
         let instructions: Vec<_> = std::iter::once(Some(dummy_label))
             .chain(body)
             .collect::<Option<_>>()?;
-        let mut jumps = Vec::with_capacity(instructions.len());
-        jumps.resize(jumps.capacity(), Cell::new(JumpSet::EMPTY));
 
         Some(Function {
             name,
             instructions,
-            jumps,
             regs_used: ctx.regs_used,
         })
     }
@@ -333,7 +325,7 @@ struct Indexed<T> {
 }
 
 impl Lower for Indexed<ast::Instruction> {
-    type Output = InstructionWithRange;
+    type Output = Instruction;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let Indexed {
@@ -383,26 +375,23 @@ impl Lower for Indexed<ast::Instruction> {
             ast::Instruction::Sub(instr) => instr.lower(ctx),
             ast::Instruction::Type(instr) => instr.lower(ctx),
         }?;
-        Some(InstructionWithRange {
-            value,
-            range: instr.range(ctx.tree),
-        })
+        Some(Instruction::new(value, instr.range(ctx.tree)))
     }
 }
 
 impl Lower for Indexed<ast::LabelDef> {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let Indexed { index, value: defn } = self;
         let name = lower!(defn, ctx; name);
         ctx.mark_label_index(name.value, index);
-        Some(Instruction::Label { name })
+        Some(InstructionKind::Label { name })
     }
 }
 
 impl Lower for ast::InstrAdd {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, lhs, rhs) = lower!(self, ctx; to, lhs, rhs);
@@ -412,18 +401,18 @@ impl Lower for ast::InstrAdd {
                 return if reg == to {
                     None
                 } else {
-                    Some(Instruction::Reg { to, from: reg })
+                    Some(InstructionKind::Reg { to, from: reg })
                 };
             }
             (IntOrReg::Int(1), IntOrReg::Reg(reg)) | (IntOrReg::Reg(reg), IntOrReg::Int(1))
                 if reg == to =>
             {
-                return Some(Instruction::Incr { reg });
+                return Some(InstructionKind::Incr { reg });
             }
             (IntOrReg::Int(-1), IntOrReg::Reg(reg)) | (IntOrReg::Reg(reg), IntOrReg::Int(-1))
                 if reg == to =>
             {
-                return Some(Instruction::Decr { reg });
+                return Some(InstructionKind::Decr { reg });
             }
             (IntOrReg::Int(lhs), IntOrReg::Reg(rhs)) | (IntOrReg::Reg(rhs), IntOrReg::Int(lhs)) => {
                 BinaryArgs::IR(lhs, rhs)
@@ -439,10 +428,10 @@ impl Lower for ast::InstrAdd {
                         return None;
                     }
                 };
-                return Some(Instruction::Int { to, int });
+                return Some(InstructionKind::Int { to, int });
             }
         };
-        Some(Instruction::Binary {
+        Some(InstructionKind::Binary {
             op: BinaryOp::Add,
             args,
             to,
@@ -451,16 +440,16 @@ impl Lower for ast::InstrAdd {
 }
 
 impl Lower for ast::InstrAddr {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, lbl) = lower!(self, ctx; to, label);
-        Some(Instruction::Addr { to, lbl })
+        Some(InstructionKind::Addr { to, lbl })
     }
 }
 
 impl Lower for ast::InstrArr {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, len) = lower!(self, ctx; to, len);
@@ -468,24 +457,24 @@ impl Lower for ast::InstrArr {
             IntOrReg::Int(len) => UnaryArg::I(len),
             IntOrReg::Reg(len) => UnaryArg::R(len),
         };
-        Some(Instruction::Arr { to, len })
+        Some(InstructionKind::Arr { to, len })
     }
 }
 
 impl Lower for ast::InstrBB {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (cond, lbl_false, lbl_true) = lower!(self, ctx; cond, lbl_false, lbl_true);
         Some(match cond {
             IntOrReg::Int(cond) => {
                 let lbl = if cond == 0 { lbl_false } else { lbl_true };
-                Instruction::Jump {
+                InstructionKind::Jump {
                     kind: JumpKind::Unconditional,
                     lbl,
                 }
             }
-            IntOrReg::Reg(cond) => Instruction::Branch {
+            IntOrReg::Reg(cond) => InstructionKind::Branch {
                 kind: BranchKind::Nz { cond },
                 lbl_false,
                 lbl_true,
@@ -495,7 +484,7 @@ impl Lower for ast::InstrBB {
 }
 
 impl Lower for ast::InstrBEq {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl_false, lbl_true) = lower!(self, ctx; lhs, rhs, lbl_false, lbl_true);
@@ -512,13 +501,13 @@ impl Lower for ast::InstrBEq {
                 },
                 (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                     let lbl = if lhs == rhs { lbl_true } else { lbl_false };
-                    return Some(Instruction::Jump {
+                    return Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     });
                 }
             };
-        Some(Instruction::Branch {
+        Some(InstructionKind::Branch {
             kind,
             lbl_false,
             lbl_true,
@@ -527,7 +516,7 @@ impl Lower for ast::InstrBEq {
 }
 
 impl Lower for ast::InstrBLt {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl_false, lbl_true) = lower!(self, ctx; lhs, rhs, lbl_false, lbl_true);
@@ -537,13 +526,13 @@ impl Lower for ast::InstrBLt {
             (IntOrReg::Reg(lhs), IntOrReg::Int(rhs)) => BinaryArgs::RI(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 let lbl = if lhs < rhs { lbl_true } else { lbl_false };
-                return Some(Instruction::Jump {
+                return Some(InstructionKind::Jump {
                     kind: JumpKind::Unconditional,
                     lbl,
                 });
             }
         };
-        Some(Instruction::Branch {
+        Some(InstructionKind::Branch {
             kind: BranchKind::Lt { args },
             lbl_false,
             lbl_true,
@@ -552,7 +541,7 @@ impl Lower for ast::InstrBLt {
 }
 
 impl Lower for ast::InstrCall {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, func) = lower!(self, ctx; to, func);
@@ -561,23 +550,23 @@ impl Lower for ast::InstrCall {
             .map(|arg| arg.lower(ctx))
             .collect::<Option<_>>()?;
         Some(match func {
-            LblOrReg::Lbl(func) => Instruction::Call { to, func, args },
-            LblOrReg::Reg(func) => Instruction::DCall { to, func, args },
+            LblOrReg::Lbl(func) => InstructionKind::Call { to, func, args },
+            LblOrReg::Reg(func) => InstructionKind::DCall { to, func, args },
         })
     }
 }
 
 impl Lower for ast::InstrDecr {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let reg = lower!(self, ctx; reg);
-        Some(Instruction::Decr { reg })
+        Some(InstructionKind::Decr { reg })
     }
 }
 
 impl Lower for ast::InstrDiv {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, lhs, rhs) = lower!(self, ctx; to, lhs, rhs);
@@ -593,17 +582,17 @@ impl Lower for ast::InstrDiv {
             // TODO: Is it best to make this assumption given that `rhs` might be 0?
             //  same with the equivalent case for `mod`
             (IntOrReg::Int(0), IntOrReg::Reg(_)) => {
-                return Some(Instruction::Int { to, int: 0 });
+                return Some(InstructionKind::Int { to, int: 0 });
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(1)) => {
                 return if to == reg {
                     None
                 } else {
-                    Some(Instruction::Reg { to, from: reg })
+                    Some(InstructionKind::Reg { to, from: reg })
                 };
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(-1)) => {
-                return Some(Instruction::Unary {
+                return Some(InstructionKind::Unary {
                     op: UnaryOp::Neg,
                     arg: reg,
                     to,
@@ -621,7 +610,7 @@ impl Lower for ast::InstrDiv {
                 }
                 let int = lhs.checked_div(rhs);
                 return match int {
-                    Some(int) => Some(Instruction::Int { to, int }),
+                    Some(int) => Some(InstructionKind::Int { to, int }),
                     None => {
                         ctx.error(HirError {
                             kind: HirErrorKind::IntOutOfRange,
@@ -632,7 +621,7 @@ impl Lower for ast::InstrDiv {
                 };
             }
         };
-        Some(Instruction::Binary {
+        Some(InstructionKind::Binary {
             op: BinaryOp::Div,
             args,
             to,
@@ -641,15 +630,15 @@ impl Lower for ast::InstrDiv {
 }
 
 impl Lower for ast::InstrExit {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, _ctx: &mut LoweringContext) -> Option<Self::Output> {
-        Some(Instruction::Exit)
+        Some(InstructionKind::Exit)
     }
 }
 
 impl Lower for ast::InstrGet {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, arr, idx) = lower!(self, ctx; to, arr, idx);
@@ -657,39 +646,39 @@ impl Lower for ast::InstrGet {
             IntOrReg::Int(idx) => UnaryArg::I(idx),
             IntOrReg::Reg(idx) => UnaryArg::R(idx),
         };
-        Some(Instruction::Get { to, arr, idx })
+        Some(InstructionKind::Get { to, arr, idx })
     }
 }
 
 impl Lower for ast::InstrIncr {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let reg = lower!(self, ctx; reg);
-        Some(Instruction::Incr { reg })
+        Some(InstructionKind::Incr { reg })
     }
 }
 
 impl Lower for ast::InstrInt {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, int) = lower!(self, ctx; to, value);
-        Some(Instruction::Int { to, int })
+        Some(InstructionKind::Int { to, int })
     }
 }
 
 impl Lower for ast::InstrJump {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let lbl = lower!(self, ctx; addr);
         Some(match lbl {
-            LblOrReg::Lbl(lbl) => Instruction::Jump {
+            LblOrReg::Lbl(lbl) => InstructionKind::Jump {
                 kind: JumpKind::Unconditional,
                 lbl,
             },
-            LblOrReg::Reg(lbl) => Instruction::DJump {
+            LblOrReg::Reg(lbl) => InstructionKind::DJump {
                 kind: JumpKind::Unconditional,
                 lbl,
             },
@@ -698,7 +687,7 @@ impl Lower for ast::InstrJump {
 }
 
 impl Lower for ast::InstrJumpEq {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl) = lower!(self, ctx; lhs, rhs, addr);
@@ -709,7 +698,7 @@ impl Lower for ast::InstrJumpEq {
             }
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return if lhs == rhs {
-                    Some(Instruction::Jump {
+                    Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     })
@@ -718,7 +707,7 @@ impl Lower for ast::InstrJumpEq {
                 }
             }
         };
-        Some(Instruction::Jump {
+        Some(InstructionKind::Jump {
             kind: JumpKind::Eq { args },
             lbl,
         })
@@ -726,7 +715,7 @@ impl Lower for ast::InstrJumpEq {
 }
 
 impl Lower for ast::InstrJumpEz {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (cond, lbl) = lower!(self, ctx; cond, addr);
@@ -735,12 +724,12 @@ impl Lower for ast::InstrJumpEz {
             IntOrReg::Int(_) => return None,
             IntOrReg::Reg(cond) => JumpKind::Ez { cond },
         };
-        Some(Instruction::Jump { kind, lbl })
+        Some(InstructionKind::Jump { kind, lbl })
     }
 }
 
 impl Lower for ast::InstrJumpGe {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl) = lower!(self, ctx; lhs, rhs, addr);
@@ -750,7 +739,7 @@ impl Lower for ast::InstrJumpGe {
             (IntOrReg::Reg(rhs), IntOrReg::Int(lhs)) => BinaryArgs::IR(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return if lhs >= rhs {
-                    Some(Instruction::Jump {
+                    Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     })
@@ -759,7 +748,7 @@ impl Lower for ast::InstrJumpGe {
                 }
             }
         };
-        Some(Instruction::Jump {
+        Some(InstructionKind::Jump {
             kind: JumpKind::Le { args },
             lbl,
         })
@@ -767,7 +756,7 @@ impl Lower for ast::InstrJumpGe {
 }
 
 impl Lower for ast::InstrJumpGt {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl) = lower!(self, ctx; lhs, rhs, addr);
@@ -777,7 +766,7 @@ impl Lower for ast::InstrJumpGt {
             (IntOrReg::Reg(rhs), IntOrReg::Int(lhs)) => BinaryArgs::IR(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return if lhs > rhs {
-                    Some(Instruction::Jump {
+                    Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     })
@@ -786,7 +775,7 @@ impl Lower for ast::InstrJumpGt {
                 }
             }
         };
-        Some(Instruction::Jump {
+        Some(InstructionKind::Jump {
             kind: JumpKind::Lt { args },
             lbl,
         })
@@ -794,7 +783,7 @@ impl Lower for ast::InstrJumpGt {
 }
 
 impl Lower for ast::InstrJumpLe {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl) = lower!(self, ctx; lhs, rhs, addr);
@@ -804,7 +793,7 @@ impl Lower for ast::InstrJumpLe {
             (IntOrReg::Reg(lhs), IntOrReg::Int(rhs)) => BinaryArgs::RI(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return if lhs <= rhs {
-                    Some(Instruction::Jump {
+                    Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     })
@@ -813,7 +802,7 @@ impl Lower for ast::InstrJumpLe {
                 }
             }
         };
-        Some(Instruction::Jump {
+        Some(InstructionKind::Jump {
             kind: JumpKind::Le { args },
             lbl,
         })
@@ -821,7 +810,7 @@ impl Lower for ast::InstrJumpLe {
 }
 
 impl Lower for ast::InstrJumpLt {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (lhs, rhs, lbl) = lower!(self, ctx; lhs, rhs, addr);
@@ -831,7 +820,7 @@ impl Lower for ast::InstrJumpLt {
             (IntOrReg::Reg(lhs), IntOrReg::Int(rhs)) => BinaryArgs::RI(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return if lhs < rhs {
-                    Some(Instruction::Jump {
+                    Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     })
@@ -840,7 +829,7 @@ impl Lower for ast::InstrJumpLt {
                 }
             }
         };
-        Some(Instruction::Jump {
+        Some(InstructionKind::Jump {
             kind: JumpKind::Lt { args },
             lbl,
         })
@@ -848,7 +837,7 @@ impl Lower for ast::InstrJumpLt {
 }
 
 impl Lower for ast::InstrJumpNe {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     #[allow(clippy::if_not_else)]
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
@@ -860,7 +849,7 @@ impl Lower for ast::InstrJumpNe {
             }
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return if lhs != rhs {
-                    Some(Instruction::Jump {
+                    Some(InstructionKind::Jump {
                         kind: JumpKind::Unconditional,
                         lbl,
                     })
@@ -869,7 +858,7 @@ impl Lower for ast::InstrJumpNe {
                 }
             }
         };
-        Some(Instruction::Jump {
+        Some(InstructionKind::Jump {
             kind: JumpKind::Ne { args },
             lbl,
         })
@@ -877,7 +866,7 @@ impl Lower for ast::InstrJumpNe {
 }
 
 impl Lower for ast::InstrJumpNz {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (cond, lbl) = lower!(self, ctx; cond, addr);
@@ -886,21 +875,21 @@ impl Lower for ast::InstrJumpNz {
             IntOrReg::Int(_) => JumpKind::Unconditional,
             IntOrReg::Reg(cond) => JumpKind::Nz { cond },
         };
-        Some(Instruction::Jump { kind, lbl })
+        Some(InstructionKind::Jump { kind, lbl })
     }
 }
 
 impl Lower for ast::InstrLen {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, arr) = lower!(self, ctx; to, arr);
-        Some(Instruction::Len { to, arr })
+        Some(InstructionKind::Len { to, arr })
     }
 }
 
 impl Lower for ast::InstrMod {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, lhs, rhs) = lower!(self, ctx; to, lhs, rhs);
@@ -914,7 +903,7 @@ impl Lower for ast::InstrMod {
                 return None;
             }
             (IntOrReg::Int(0), IntOrReg::Reg(_)) | (IntOrReg::Reg(_), IntOrReg::Int(1 | -1)) => {
-                return Some(Instruction::Int { to, int: 0 });
+                return Some(InstructionKind::Int { to, int: 0 });
             }
             (IntOrReg::Reg(lhs), IntOrReg::Int(rhs)) => BinaryArgs::RI(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Reg(rhs)) => BinaryArgs::IR(lhs, rhs),
@@ -927,7 +916,7 @@ impl Lower for ast::InstrMod {
                     return None;
                 }
                 return match lhs.checked_rem(rhs) {
-                    Some(int) => Some(Instruction::Int { to, int }),
+                    Some(int) => Some(InstructionKind::Int { to, int }),
                     None => {
                         ctx.error(HirError {
                             kind: HirErrorKind::IntOutOfRange,
@@ -938,7 +927,7 @@ impl Lower for ast::InstrMod {
                 };
             }
         };
-        Some(Instruction::Binary {
+        Some(InstructionKind::Binary {
             op: BinaryOp::Mod,
             args,
             to,
@@ -947,24 +936,24 @@ impl Lower for ast::InstrMod {
 }
 
 impl Lower for ast::InstrMul {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, lhs, rhs) = lower!(self, ctx; to, lhs, rhs);
         let args = match (lhs, rhs) {
             (IntOrReg::Reg(lhs), IntOrReg::Reg(rhs)) => BinaryArgs::RR(lhs, rhs),
             (IntOrReg::Reg(_), IntOrReg::Int(0)) | (IntOrReg::Int(0), IntOrReg::Reg(_)) => {
-                return Some(Instruction::Int { to, int: 0 });
+                return Some(InstructionKind::Int { to, int: 0 });
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(1)) | (IntOrReg::Int(1), IntOrReg::Reg(reg)) => {
                 return if reg == to {
                     None
                 } else {
-                    Some(Instruction::Reg { to, from: reg })
+                    Some(InstructionKind::Reg { to, from: reg })
                 };
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(-1)) | (IntOrReg::Int(-1), IntOrReg::Reg(reg)) => {
-                return Some(Instruction::Unary {
+                return Some(InstructionKind::Unary {
                     op: UnaryOp::Neg,
                     to,
                     arg: reg,
@@ -975,7 +964,7 @@ impl Lower for ast::InstrMul {
             }
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return match lhs.checked_mul(rhs) {
-                    Some(int) => Some(Instruction::Int { to, int }),
+                    Some(int) => Some(InstructionKind::Int { to, int }),
                     None => {
                         ctx.error(HirError {
                             kind: HirErrorKind::IntOutOfRange,
@@ -986,7 +975,7 @@ impl Lower for ast::InstrMul {
                 };
             }
         };
-        Some(Instruction::Binary {
+        Some(InstructionKind::Binary {
             op: BinaryOp::Mul,
             args,
             to,
@@ -995,13 +984,13 @@ impl Lower for ast::InstrMul {
 }
 
 impl Lower for ast::InstrNeg {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, rhs) = lower!(self, ctx; to, rhs);
         Some(match rhs {
-            IntOrReg::Int(int) => Instruction::Int { to, int: -int },
-            IntOrReg::Reg(arg) => Instruction::Unary {
+            IntOrReg::Int(int) => InstructionKind::Int { to, int: -int },
+            IntOrReg::Reg(arg) => InstructionKind::Unary {
                 op: UnaryOp::Neg,
                 to,
                 arg,
@@ -1011,7 +1000,7 @@ impl Lower for ast::InstrNeg {
 }
 
 impl Lower for ast::InstrPutc {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let char = lower!(self, ctx; char);
@@ -1036,25 +1025,25 @@ impl Lower for ast::InstrPutc {
             }
             IntOrReg::Reg(char) => UnaryArg::R(char),
         };
-        Some(Instruction::Putc { arg })
+        Some(InstructionKind::Putc { arg })
     }
 }
 
 impl Lower for ast::InstrReg {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, from) = lower!(self, ctx; to, from);
         if to == from {
             None
         } else {
-            Some(Instruction::Reg { to, from })
+            Some(InstructionKind::Reg { to, from })
         }
     }
 }
 
 impl Lower for ast::InstrRet {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let val = lower!(self, ctx; ret);
@@ -1062,12 +1051,12 @@ impl Lower for ast::InstrRet {
             IntOrReg::Int(int) => UnaryArg::I(int),
             IntOrReg::Reg(reg) => UnaryArg::R(reg),
         };
-        Some(Instruction::Ret { arg })
+        Some(InstructionKind::Ret { arg })
     }
 }
 
 impl Lower for ast::InstrSet {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (arr, idx, val) = lower!(self, ctx; arr, idx, val);
@@ -1077,7 +1066,7 @@ impl Lower for ast::InstrSet {
             (IntOrReg::Reg(idx), IntOrReg::Int(val)) => SetArgs::RI(idx, val),
             (IntOrReg::Int(idx), IntOrReg::Int(val)) => SetArgs::II(idx, val),
         };
-        Some(Instruction::Set {
+        Some(InstructionKind::Set {
             arr,
             idx_and_val: args,
         })
@@ -1085,7 +1074,7 @@ impl Lower for ast::InstrSet {
 }
 
 impl Lower for ast::InstrStr {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let to = lower!(self, ctx; to);
@@ -1103,7 +1092,7 @@ impl Lower for ast::InstrStr {
             buf
         });
         let str = ctx.interner.intern(&text);
-        Some(Instruction::Str {
+        Some(InstructionKind::Str {
             to,
             str: KeyWithRange { value: str, range },
         })
@@ -1111,7 +1100,7 @@ impl Lower for ast::InstrStr {
 }
 
 impl Lower for ast::InstrSub {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, lhs, rhs) = lower!(self, ctx; to, lhs, rhs);
@@ -1121,27 +1110,27 @@ impl Lower for ast::InstrSub {
                 return if reg == to {
                     None
                 } else {
-                    Some(Instruction::Reg { to, from: reg })
+                    Some(InstructionKind::Reg { to, from: reg })
                 };
             }
             (IntOrReg::Int(0), IntOrReg::Reg(reg)) => {
-                return Some(Instruction::Unary {
+                return Some(InstructionKind::Unary {
                     op: UnaryOp::Neg,
                     to,
                     arg: reg,
                 });
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(1)) if reg == to => {
-                return Some(Instruction::Decr { reg });
+                return Some(InstructionKind::Decr { reg });
             }
             (IntOrReg::Reg(reg), IntOrReg::Int(-1)) if reg == to => {
-                return Some(Instruction::Incr { reg });
+                return Some(InstructionKind::Incr { reg });
             }
             (IntOrReg::Int(lhs), IntOrReg::Reg(rhs)) => BinaryArgs::IR(lhs, rhs),
             (IntOrReg::Reg(lhs), IntOrReg::Int(rhs)) => BinaryArgs::RI(lhs, rhs),
             (IntOrReg::Int(lhs), IntOrReg::Int(rhs)) => {
                 return match lhs.checked_sub(rhs) {
-                    Some(x) if common::int_is_valid(x) => Some(Instruction::Int { to, int: x }),
+                    Some(x) if common::int_is_valid(x) => Some(InstructionKind::Int { to, int: x }),
                     _ => {
                         ctx.error(HirError {
                             kind: HirErrorKind::IntOutOfRange,
@@ -1152,7 +1141,7 @@ impl Lower for ast::InstrSub {
                 };
             }
         };
-        Some(Instruction::Binary {
+        Some(InstructionKind::Binary {
             op: BinaryOp::Sub,
             args,
             to,
@@ -1161,11 +1150,11 @@ impl Lower for ast::InstrSub {
 }
 
 impl Lower for ast::InstrType {
-    type Output = Instruction;
+    type Output = InstructionKind;
 
     fn lower(self, ctx: &mut LoweringContext) -> Option<Self::Output> {
         let (to, obj) = lower!(self, ctx; to, obj);
-        Some(Instruction::Type { to, obj })
+        Some(InstructionKind::Type { to, obj })
     }
 }
 

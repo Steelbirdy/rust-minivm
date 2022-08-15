@@ -5,7 +5,7 @@ use crate::{
     },
 };
 
-visit_trait![hir::Instruction:
+visit_trait![hir::InstructionKind:
     Exit => visit_exit();
     Label => visit_label(name: KeyWithRange);
     Reg => visit_reg(to: Reg, from: Reg);
