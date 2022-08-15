@@ -6,7 +6,9 @@
     clippy::enum_glob_use
 )]
 
+#[macro_use]
 mod common;
+
 pub mod hir;
 pub mod mir;
 pub mod parse;
@@ -68,7 +70,7 @@ pub fn build_mir(
     gc: &mut Gc,
     _process: &Process,
 ) -> Result<Vec<mir::Instruction>> {
-    Ok(mir::lower_hir(hir, gc, interner))
+    Ok(mir::lower_hir(hir, interner, gc))
 }
 
 pub fn build_bytecode(mir: &[mir::Instruction], _process: &Process) -> Result<Box<[u8]>> {

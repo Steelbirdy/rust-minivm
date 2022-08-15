@@ -1,5 +1,5 @@
 use crate::{
-    common::{Int, List, Reg},
+    common::{Int, Reg},
     vm::Value,
 };
 use std::fmt::Write;
@@ -254,7 +254,7 @@ pub enum Instruction {
         to: Reg,
     },
     AddIR {
-        lhs: Value,
+        lhs: Int,
         rhs: Reg,
         to: Reg,
     },
@@ -265,11 +265,11 @@ pub enum Instruction {
     },
     SubRI {
         lhs: Reg,
-        rhs: Value,
+        rhs: Int,
         to: Reg,
     },
     SubIR {
-        lhs: Value,
+        lhs: Int,
         rhs: Reg,
         to: Reg,
     },
@@ -279,7 +279,7 @@ pub enum Instruction {
         to: Reg,
     },
     MulIR {
-        lhs: Value,
+        lhs: Int,
         rhs: Reg,
         to: Reg,
     },
@@ -290,11 +290,11 @@ pub enum Instruction {
     },
     DivRI {
         lhs: Reg,
-        rhs: Value,
+        rhs: Int,
         to: Reg,
     },
     DivIR {
-        lhs: Value,
+        lhs: Int,
         rhs: Reg,
         to: Reg,
     },
@@ -305,11 +305,11 @@ pub enum Instruction {
     },
     ModRI {
         lhs: Reg,
-        rhs: Value,
+        rhs: Int,
         to: Reg,
     },
     ModIR {
-        lhs: Value,
+        lhs: Int,
         rhs: Reg,
         to: Reg,
     },
@@ -378,7 +378,7 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    pub fn call(addr: usize, args: List<Reg>, num_regs: Reg, to: Reg) -> Self {
+    pub fn call(addr: usize, args: &[Reg], num_regs: Reg, to: Reg) -> Self {
         match args.len() {
             0 => Self::Call0 { addr, num_regs, to },
             1 => Self::Call1 {
@@ -438,7 +438,7 @@ impl Instruction {
                 Self::CallL {
                     addr,
                     num_args,
-                    args: args.into_vec(),
+                    args: args.to_vec(),
                     num_regs,
                     to,
                 }
@@ -446,7 +446,7 @@ impl Instruction {
         }
     }
 
-    pub fn dcall(addr: Reg, args: List<Reg>, num_regs: Reg, to: Reg) -> Self {
+    pub fn dcall(addr: Reg, args: &[Reg], num_regs: Reg, to: Reg) -> Self {
         match args.len() {
             0 => Self::DCall0 { addr, num_regs, to },
             1 => Self::DCall1 {
@@ -506,7 +506,7 @@ impl Instruction {
                 Self::DCallL {
                     addr,
                     num_args,
-                    args: args.into_vec(),
+                    args: args.to_vec(),
                     num_regs,
                     to,
                 }

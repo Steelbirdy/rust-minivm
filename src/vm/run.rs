@@ -456,13 +456,13 @@ macro_rules! binary_op {
     (ri $name:ident $op:tt) => {
         fn $name(vm: &mut Vm) {
             let lhs = load!(vm);
-            let rhs = take!(vm, Value);
+            let rhs = take!(vm, Int);
             *load!(mut vm) = lhs $op rhs;
         }
     };
     (ir $name:ident $op:tt) => {
         fn $name(vm: &mut Vm) {
-            let lhs = take!(vm, Value);
+            let lhs = take!(vm, Int);
             let rhs = load!(vm);
             *load!(mut vm) = lhs $op rhs;
         }

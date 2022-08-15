@@ -7,15 +7,9 @@ pub use error::ParseError;
 pub use lexer::TokenKind;
 pub use parser::Parser;
 
-pub(crate) mod grammar {
-    pub(crate) use super::parser::assembly;
-}
-pub(crate) use ast::validate;
-
 pub type Tokens = eventree_wrapper::parser::SimpleTokens<TokenKind>;
 pub type SyntaxTree = eventree_wrapper::eventree::SyntaxTree<ParseConfig>;
-
-use eventree_wrapper::{eventree::TreeConfig, parser::TokenSet};
+pub type ParseResult = eventree_wrapper::parser::ParseResult<ParseConfig>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ParseConfig {}
@@ -45,7 +39,12 @@ impl TreeConfig for ParseConfig {
     type TokenKind = TokenKind;
 }
 
-pub type ParseResult = eventree_wrapper::parser::ParseResult<ParseConfig>;
+pub(crate) mod grammar {
+    pub(crate) use super::parser::assembly;
+}
+pub(crate) use ast::validate;
+
+use eventree_wrapper::{eventree::TreeConfig, parser::TokenSet};
 
 #[cfg(test)]
 mod tests {
