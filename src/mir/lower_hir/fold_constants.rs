@@ -15,6 +15,7 @@ pub(super) struct FoldConstants<'ctx, 'a> {
     ctx: &'a mut LoweringContext<'ctx>,
     registers: Registers,
     out: Vec<hir::InstructionKind>,
+    delayed_label: Option<KeyWithRange>,
 }
 
 impl<'ctx, 'a> FoldConstants<'ctx, 'a> {
@@ -23,6 +24,7 @@ impl<'ctx, 'a> FoldConstants<'ctx, 'a> {
             ctx,
             registers: Registers::default(),
             out: Vec::new(),
+            delayed_label: None,
         }
     }
 
@@ -36,7 +38,37 @@ impl<'ctx, 'a> FoldConstants<'ctx, 'a> {
         for (i, instr) in func.instructions.iter().enumerate() {
             let jumps = instr.jumps;
             if jumps.intersects(JumpFlags::IN | JumpFlags::OUT) {
-                self.dump_registers(i);
+                self.dump_registers(func, i + 1);
+            }
+            if jumps.intersects(JumpFlags::IN) {
+                self.registers.reset();
+            }
+
+            /* This fixes a bug that occurs (as an example) with the following assembly code:
+             ```vasm
+             ... # Inputs: r1 is an array
+             r2 <- len r1
+             r0 <- int 0
+             @loop
+             r3 <- get r1 r0
+             putchar r3
+             incr r0
+             jumpne r0 r2 loop
+             ...
+             ```
+             Without delaying adding the label, the code is (roughly) compiled as:
+             ```
+             0000 | len_rr    [r1, r2]
+             0005 | value     [0, r0]
+             0016 | get_rr    [r1, r0, r3]
+             0023 | putc_r    [r3]
+             0026 | incr      [r0]
+             0029 | jumpne_rr [r0, r2, @5]
+             ```
+             which is incorrect since it resets `r0` every iteration.
+            */
+            if let Some(name) = self.delayed_label.take() {
+                self.out.push(hir::InstructionKind::Label { name });
             }
 
             match hir::Visit::visit(self, &instr.kind) {
@@ -60,9 +92,10 @@ impl<'ctx, 'a> FoldConstants<'ctx, 'a> {
         });
     }
 
-    fn dump_registers(&mut self, start: usize) {
+    fn dump_registers(&mut self, func: &Function, start: usize) {
         for (reg, constant) in self.registers.iter_mut() {
-            if !constant.is_in_scope() && hir::register_is_used(self.ctx) {
+            if !constant.is_in_scope() && hir::register_is_used(self.ctx.program, func, reg, start)
+            {
                 let val = constant.get();
                 self.out.push(match val.tagged() {
                     TaggedValue::Int(int) => hir::InstructionKind::Int { to: reg, int },
@@ -119,6 +152,11 @@ impl hir::Visit for FoldConstants<'_, '_> {
 
     fn unimplemented(&mut self) -> Self::Output {
         FoldResult::Keep
+    }
+
+    fn visit_label(&mut self, name: KeyWithRange) -> Self::Output {
+        self.delayed_label = Some(name);
+        FoldResult::None
     }
 
     fn visit_reg(&mut self, to: Reg, from: Reg) -> Self::Output {

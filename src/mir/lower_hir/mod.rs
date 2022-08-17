@@ -9,25 +9,13 @@ use crate::{
     common::{Int, Interner, Key, List, Reg},
     hir::{self, BinaryOp, BranchKind, Function, JumpKind, KeyWithRange, Program, UnaryOp},
     mir::Instruction,
-    vm::{Gc, Value},
+    vm::{Gc, Ptr, Value},
 };
 use rustc_hash::FxHashMap;
 
 pub fn lower_hir(program: &Program, interner: &Interner, gc: &mut Gc) -> Vec<Instruction> {
-    let mut ctx = LoweringContext::new(interner, gc);
-
-    let addr = ctx.addr(Key::entry_point());
-    ctx.push(Instruction::Jump { addr });
-
-    let mut functions: List<_> = program.functions.values().collect();
-    functions.sort_unstable_by_key(|func| func.name.range.start());
-
-    for func in functions {
-        ctx.lower_function(func);
-    }
-
-    ctx.patch_addrs();
-
+    let mut ctx = LoweringContext::new(program, interner, gc);
+    ctx.finish();
     ctx.out
 }
 
@@ -109,6 +97,7 @@ impl TryFrom<BinaryArgs> for hir::BinaryArgs {
 }
 
 pub struct LoweringContext<'a> {
+    program: &'a Program,
     interner: &'a Interner,
     gc: &'a mut Gc,
     out: Vec<Instruction>,
@@ -122,8 +111,13 @@ struct LowerInstruction<'ctx, 'a> {
 }
 
 impl<'a> LoweringContext<'a> {
-    pub(in crate::mir) fn new(interner: &'a Interner, gc: &'a mut Gc) -> Self {
+    pub(in crate::mir) fn new(
+        program: &'a Program,
+        interner: &'a Interner,
+        gc: &'a mut Gc,
+    ) -> Self {
         Self {
+            program,
             interner,
             gc,
             out: Vec::new(),
@@ -132,7 +126,21 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    pub fn lower_function(&mut self, func: &Function) {
+    fn finish(&mut self) {
+        let addr = self.addr(Key::entry_point());
+        self.push(Instruction::Jump { addr });
+
+        let mut functions: List<_> = self.program.functions.values().collect();
+        functions.sort_unstable_by_key(|func| func.name.range.start());
+
+        for func in functions {
+            self.lower_function(func);
+        }
+
+        self.patch_addrs();
+    }
+
+    fn lower_function(&mut self, func: &Function) {
         let start_idx = self.out.len();
         self.out.push(Instruction::Func {
             end: 0,
@@ -141,15 +149,10 @@ impl<'a> LoweringContext<'a> {
         self.label_locs.insert(func.name.value, self.out.len());
 
         let instructions = self.fold_constants(func);
-        dbg!(&instructions);
 
         let mut lower_instr = LowerInstruction::new(self, func);
         for instr in instructions {
             lower_instr.lower(&instr);
-        }
-
-        for instr in &func.instructions {
-            lower_instr.lower(&instr.kind);
         }
 
         let end_idx = self.out.len();
@@ -335,6 +338,13 @@ impl hir::Visit for LowerInstruction<'_, '_> {
     fn visit_int(&mut self, to: Reg, int: Int) -> Self::Output {
         self.push(Instruction::Value {
             val: Value::int_unchecked(int),
+            to,
+        });
+    }
+
+    fn visit_ptr(&mut self, to: Reg, ptr: Ptr) -> Self::Output {
+        self.push(Instruction::Value {
+            val: Value::ptr_unchecked(ptr),
             to,
         });
     }

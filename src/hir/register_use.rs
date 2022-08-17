@@ -1,8 +1,8 @@
-use std::ops::ControlFlow;
 use crate::{
     common::Reg,
-    hir::{Instruction, Function, Program, tracing::Tracer},
+    hir::{tracing::Tracer, Function, Instruction, Program},
 };
+use std::ops::ControlFlow;
 
 pub fn register_is_used(program: &Program, func: &Function, reg: Reg, start: usize) -> bool {
     RegisterUse::new(program, func).reg_is_used(reg, start)

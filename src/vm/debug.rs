@@ -107,8 +107,8 @@ pub fn disassemble_instruction(code: &mut BytecodeReader, buf: &mut String, gc: 
             }
         }
         AddRR | SubRR | MulRR | DivRR | ModRR => args!(Reg, Reg, Reg),
-        AddIR | SubIR | MulIR | DivIR | ModIR => args!(Value, Reg, Reg),
-        SubRI | DivRI | ModRI => args!(Reg, Value, Reg),
+        AddIR | SubIR | MulIR | DivIR | ModIR => args!(Int, Reg, Reg),
+        SubRI | DivRI | ModRI => args!(Reg, Int, Reg),
         Neg => args!(Reg, Reg),
         Incr => args!(Reg),
         Decr => args!(Reg),

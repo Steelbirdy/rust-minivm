@@ -301,7 +301,8 @@ impl Lower for ast::Function {
         let dummy_label = Instruction::new(InstructionKind::Label { name }, name.range);
         let body = self.instructions(ctx.tree).enumerate().map(|(i, instr)| {
             let indexed = Indexed {
-                index: i,
+                // i + 1 because the Label instruction isn't counted by `enumerate`
+                index: i + 1,
                 value: instr,
             };
             indexed.lower(ctx)
