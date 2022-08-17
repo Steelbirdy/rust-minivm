@@ -6,114 +6,115 @@
     clippy::enum_glob_use
 )]
 
+#[macro_use]
 mod common;
-mod compile;
-mod parse;
+
+pub mod hir;
+pub mod mir;
+pub mod parse;
 mod vm;
 
-use codespan_reporting::diagnostic::Severity;
-pub use common::{config::{self, Diagnostic, VmDiagnostic}, BytecodeBuffer, BytecodeBuilder, BytecodeReader, Interner};
-pub use compile::{assemble, disassemble as disassemble_bytecode, CompileError};
-pub use parse::{lex, parse, validate, ParseConfig, ParseError as ValidateError};
-pub use vm::{
-    disassemble as disassemble_opcode, lower_bytecode, trace_jumps, Gc, RuntimeError, Value, Vm,
+pub use common::{
+    config::{self, Diagnostic, Process},
+    BytecodeReader, Interner,
 };
-use crate::config::Process;
+pub use vm::{disassemble as disassemble_opcode, lower_mir, Gc, Value, Vm};
 
-pub type ParseError = eventree_wrapper::parser::ParseError<ParseConfig>;
+use common::config::VmDiagnostic;
+use parse::{grammar, Parser};
 
-#[derive(Debug)]
-pub enum Error {
-    Parse(ParseError),
-    Validate(ValidateError),
-    Compile(CompileError),
-    Runtime(RuntimeError),
+pub type Result<T> = std::result::Result<T, Vec<Diagnostic>>;
+
+fn errors_to_diagnostics<T: VmDiagnostic>(
+    errors: impl IntoIterator<Item = T>,
+    process: &Process,
+) -> Vec<Diagnostic> {
+    errors
+        .into_iter()
+        .map(|err| err.to_diagnostic(process))
+        .collect()
 }
 
-impl From<ParseError> for Error {
-    fn from(e: ParseError) -> Self {
-        Self::Parse(e)
-    }
+#[must_use]
+pub fn lex(process: &Process) -> parse::Tokens {
+    parse::Tokens::tokenize(process.source)
 }
 
-impl From<ValidateError> for Error {
-    fn from(e: ValidateError) -> Self {
-        Self::Validate(e)
-    }
-}
-
-impl From<CompileError> for Error {
-    fn from(e: CompileError) -> Self {
-        Self::Compile(e)
-    }
-}
-
-impl From<RuntimeError> for Error {
-    fn from(e: RuntimeError) -> Self {
-        Self::Runtime(e)
+pub fn parse(tokens: &parse::Tokens, process: &Process) -> Result<parse::SyntaxTree> {
+    let result = Parser::parse(process.source, tokens, grammar::assembly);
+    let (tree, errors) = result.into_parts();
+    if errors.is_empty() {
+        Ok(tree)
+    } else {
+        Err(errors_to_diagnostics(errors, process))
     }
 }
 
-impl VmDiagnostic for Error {
-    fn severity(&self) -> Severity {
-        match self {
-            Self::Parse(e) => e.severity(),
-            Self::Validate(e) => e.severity(),
-            Self::Compile(e) => e.severity(),
-            Self::Runtime(e) => e.severity(),
-        }
-    }
-
-    fn to_diagnostic(&self, process: &Process) -> Diagnostic {
-        match self {
-            Self::Parse(e) => e.to_diagnostic(process),
-            Self::Validate(e) => e.to_diagnostic(process),
-            Self::Compile(e) => e.to_diagnostic(process),
-            Self::Runtime(e) => e.to_diagnostic(process),
-        }
-    }
+pub fn validate(tree: &parse::SyntaxTree, process: &Process) -> Result<()> {
+    parse::validate(tree).map_err(|errors| errors_to_diagnostics(errors, process))
 }
 
-pub fn compile(process: &config::Process, gc: &mut Gc) -> Result<BytecodeBuffer, Vec<Error>> {
-    fn collect_errors<E: Into<Error>>(errors: impl IntoIterator<Item = E>) -> Vec<Error> {
-        errors
-            .into_iter()
-            .map(Into::into)
-            .collect()
+pub fn build_hir(
+    tree: &parse::SyntaxTree,
+    interner: &mut Interner,
+    process: &Process,
+) -> Result<hir::Program> {
+    hir::LoweringContext::new(tree, interner)
+        .finish()
+        .map_err(|errors| errors_to_diagnostics(errors, process))
+}
+
+pub fn build_mir(
+    hir: &hir::Program,
+    interner: &Interner,
+    gc: &mut Gc,
+    _process: &Process,
+) -> Result<Vec<mir::Instruction>> {
+    Ok(mir::lower_hir(hir, interner, gc))
+}
+
+pub fn build_bytecode(mir: &[mir::Instruction], _process: &Process) -> Result<Box<[u8]>> {
+    Ok(vm::lower_mir(mir))
+}
+
+pub fn run(bytecode: BytecodeReader, gc: Gc, process: &Process) -> Result<Value> {
+    macro_rules! trace {
+        ($str:literal $(, $args:expr)* $(,)?) => {
+            #[cfg(feature = "trace-execution")]
+            println!($str, $($args),*)
+        };
     }
 
+    trace!("=== EXECUTION ===");
+    let ret = Vm::new(bytecode, gc, &process.config).run();
+    trace!("===           ===");
+    Ok(ret)
+}
+
+pub fn compile_and_run(process: &Process) -> Result<Value> {
     let mut interner = Interner::new();
+    let mut gc = Gc::new();
 
-    let parse_result = parse(process.source);
-    if parse_result.has_errors() {
-        return Err(collect_errors(parse_result.into_parts().1));
-    }
-    if let Err(errors) = validate(parse_result.syntax_tree()) {
-        return Err(collect_errors(errors));
-    }
-    let bytecode = match assemble(parse_result.syntax_tree(), &mut interner) {
-        Ok(b) => b,
-        Err(errors) => {
-            return Err(collect_errors(errors));
-        }
-    };
+    // Parsing (source -> AST)
+    let tokens = lex(process);
+    let tree = parse(&tokens, process)?;
+    validate(&tree, process)?;
+
+    // HIR Generation (AST -> HIR)
+    let program = build_hir(&tree, &mut interner, process)?;
+
+    // MIR Generation (HIR -> MIR)
+    let instructions = build_mir(&program, &interner, &mut gc, process)?;
+
+    // Bytecode Generation (MIR -> Bytecode)
+    let bytecode = build_bytecode(&instructions, process)?;
+    let reader = BytecodeReader::new(&bytecode);
     if process.config.dump_bytecode {
         println!("=== BYTECODE ===");
-        println!("{}", disassemble_bytecode(bytecode.reader()));
+        println!("{}", disassemble_opcode(reader, &mut gc));
         println!("================\n");
     }
-    let jumps = trace_jumps(bytecode.reader());
 
-    // Lowering (bytecode -> internal bytecode)
-    let opcode = lower_bytecode(bytecode.reader(), &jumps, gc);
-    if process.config.dump_internal_bytecode {
-        println!("=== INTERNAL BYTECODE ===");
-        println!("{}", disassemble_opcode(opcode.reader()));
-        println!("=========================\n");
-    }
-    Ok(opcode)
-}
-
-pub fn run(code: BytecodeReader, gc: Gc, process: &config::Process) -> Result<Value, RuntimeError> {
-    Vm::new(code, gc, &process.config).run()
+    // Execution
+    run(reader, gc, process)
 }

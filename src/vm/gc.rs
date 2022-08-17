@@ -9,7 +9,7 @@ use crate::vm::RuntimeError;
 
 const GC_MIN_THRESHOLD: usize = 1 << 12;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct Ptr(usize);
 
@@ -162,6 +162,16 @@ impl Gc {
         }
     }
 
+    #[allow(unsafe_code)]
+    #[must_use]
+    pub fn array(&self, ptr: Ptr) -> &[Value] {
+        let len = self.array_len_usize(ptr);
+        unsafe {
+            let heap_ptr = self.buf.as_ptr().add(ptr.0).cast::<Value>();
+            std::slice::from_raw_parts(heap_ptr, len)
+        }
+    }
+
     #[must_use]
     pub fn get(&self, ptr: Ptr, idx: usize) -> Value {
         self.buf[ptr.0 + idx].value()
@@ -200,7 +210,7 @@ impl Gc {
         }
 
         for &mut reg in &mut *registers {
-            self.mark(reg)
+            self.mark(reg);
         }
 
         if self.buf_used > self.move_buf.len() {

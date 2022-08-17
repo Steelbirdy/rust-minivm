@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[cfg(feature = "unsafe")]
 use std::mem;
 
@@ -27,6 +29,12 @@ impl Key {
 
     pub fn entry_point() -> Self {
         Self::from_raw(1).unwrap()
+    }
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.into_inner(), f)
     }
 }
 

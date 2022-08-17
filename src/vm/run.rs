@@ -29,6 +29,7 @@ pub struct Vm<'a> {
 }
 
 impl<'a> Vm<'a> {
+    #[must_use]
     pub fn new(code: BytecodeReader<'a>, gc: Gc, config: &'a RunConfig) -> Self {
         Self {
             code,
@@ -99,7 +100,7 @@ impl<'a> Vm<'a> {
                 Opcode::Call6 => call6(self),
                 Opcode::Call7 => call7(self),
                 Opcode::Call8 => call8(self),
-                Opcode::CallV => callv(self),
+                Opcode::CallL => call_l(self),
                 Opcode::DJump => djump(self),
                 Opcode::DCall0 => dcall0(self),
                 Opcode::DCall1 => dcall1(self),
@@ -110,9 +111,9 @@ impl<'a> Vm<'a> {
                 Opcode::DCall6 => dcall6(self),
                 Opcode::DCall7 => dcall7(self),
                 Opcode::DCall8 => dcall8(self),
-                Opcode::DCallV => dcallv(self),
+                Opcode::DCallL => dcall_l(self),
                 Opcode::RetR => ret_r(self),
-                Opcode::RetI => ret_i(self),
+                Opcode::RetV => ret_i(self),
                 Opcode::Value => value(self),
                 Opcode::AddRR => add_rr(self),
                 Opcode::AddIR => add_ir(self),
@@ -151,7 +152,7 @@ impl<'a> Vm<'a> {
     #[cfg(feature = "trace-execution")]
     fn debug_next(&mut self) {
         self.code
-            .at_checkpoint(|code| disassemble_instruction(code, &mut self.buf));
+            .at_checkpoint(|code| disassemble_instruction(code, &mut self.buf, &mut self.gc));
         print!("{}", self.buf);
         self.buf.clear();
     }
@@ -239,36 +240,42 @@ fn reg_r(vm: &mut Vm) {
     *load!(mut vm) = load!(vm);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchnz(vm: &mut Vm) {
     let cond = load!(vm);
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(cond != 0) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn brancheq_rr(vm: &mut Vm) {
     let (lhs, rhs) = (load!(vm), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn brancheq_ir(vm: &mut Vm) {
     let (lhs, rhs) = (take!(vm, Value), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs == rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchlt_rr(vm: &mut Vm) {
     let (lhs, rhs) = (load!(vm), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchlt_ri(vm: &mut Vm) {
     let (lhs, rhs) = (load!(vm), take!(vm, Value));
     let addrs = take!(vm, [Addr; 2]);
     vm.code.set_offset(addrs[(lhs < rhs) as usize] as _);
 }
 
+#[allow(clippy::cast_lossless)]
 fn branchlt_ir(vm: &mut Vm) {
     let (lhs, rhs) = (take!(vm, Value), load!(vm));
     let addrs = take!(vm, [Addr; 2]);
@@ -344,8 +351,9 @@ binary_jump_op!(rr jumpne_rr !=);
 binary_jump_op!(ir jumpne_ir !=);
 
 macro_rules! call_ops {
-    ($($name:ident $($i:literal $arg:ident),*;)+) => {
+    ($($name:ident $($num_args:literal)?;)+) => {
         $(
+        #[allow(unsafe_code)]
         fn $name(vm: &mut Vm) {
             if vm.check_stack_overflow() {
                 return;
@@ -354,15 +362,19 @@ macro_rules! call_ops {
             let addr = take!(vm, Addr);
 
             $(
-            let $arg = load!(vm);
-            )*
+            let args: [Value; $num_args] = std::array::from_fn(|_| load!(vm));
+            )?
 
             let num_regs = take!(vm, Reg);
             vm.push_frame(num_regs, addr as usize);
 
             $(
-            vm.registers[$i as usize + vm.frame_start] = $arg;
-            )*
+            assert!(vm.frame_start + $num_args + 1 <= vm.registers.len());
+            unsafe {
+                let registers = vm.registers.as_mut_ptr().add(vm.frame_start + 1);
+                std::ptr::copy_nonoverlapping(args.as_ptr(), registers, $num_args);
+            }
+            )?
         }
         )+
     };
@@ -370,28 +382,30 @@ macro_rules! call_ops {
 
 call_ops![
     call0;
-    call1 1 arg1;
-    call2 1 arg1, 2 arg2;
-    call3 1 arg1, 2 arg2, 3 arg3;
-    call4 1 arg1, 2 arg2, 3 arg3, 4 arg4;
-    call5 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5;
-    call6 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6;
-    call7 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6, 7 arg7;
-    call8 1 arg1, 2 arg2, 3 arg3, 4 arg4, 5 arg5, 6 arg6, 7 arg7, 8 arg8;
+    call1 1;
+    call2 2;
+    call3 3;
+    call4 4;
+    call5 5;
+    call6 6;
+    call7 7;
+    call8 8;
 ];
 
-fn callv(vm: &mut Vm) {
+#[allow(unsafe_code)]
+fn call_l(vm: &mut Vm) {
     let addr = take!(vm, Addr);
-    let num_args = take!(vm, Int);
+    let num_args = take!(vm, u32);
     let mut args = Vec::with_capacity(num_args as usize);
-    for _ in 0..num_args {
-        args.push(load!(vm));
-    }
+    args.resize_with(num_args as usize, || load!(vm));
+
     let num_regs = take!(vm, Reg);
     vm.push_frame(num_regs, addr as usize);
 
-    for i in 0..num_args {
-        vm.registers[i as usize + 1 + vm.frame_start] = args[i as usize];
+    assert!(vm.frame_start + 1 + num_args as usize <= vm.registers.len());
+    unsafe {
+        let registers = vm.registers.as_mut_ptr().add(vm.frame_start + 1);
+        std::ptr::copy_nonoverlapping(args.as_ptr(), registers, num_args as usize);
     }
 }
 
@@ -438,9 +452,9 @@ dcall_ops![
     dcall8 8;
 ];
 
-fn dcallv(vm: &mut Vm) {
+fn dcall_l(vm: &mut Vm) {
     let addr = load!(vm);
-    let num_args = take!(vm, Int);
+    let num_args = take!(vm, u32);
     let mut args = Vec::with_capacity(num_args as usize);
     for _ in 0..num_args {
         args.push(load!(vm));
@@ -489,13 +503,13 @@ macro_rules! binary_op {
     (ri $name:ident $op:tt) => {
         fn $name(vm: &mut Vm) {
             let lhs = load!(vm);
-            let rhs = take!(vm, Value);
+            let rhs = take!(vm, Int);
             *load!(mut vm) = lhs $op rhs;
         }
     };
     (ir $name:ident $op:tt) => {
         fn $name(vm: &mut Vm) {
-            let lhs = take!(vm, Value);
+            let lhs = take!(vm, Int);
             let rhs = load!(vm);
             *load!(mut vm) = lhs $op rhs;
         }

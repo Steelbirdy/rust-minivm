@@ -3,13 +3,13 @@ mod error;
 mod lexer;
 mod parser;
 
-pub use ast::validate;
 pub use error::ParseError;
-pub use lexer::{lex, TokenKind};
+pub use lexer::TokenKind;
+pub use parser::Parser;
 
+pub type Tokens = eventree_wrapper::parser::SimpleTokens<TokenKind>;
 pub type SyntaxTree = eventree_wrapper::eventree::SyntaxTree<ParseConfig>;
-
-use eventree_wrapper::{eventree::TreeConfig, parser::TokenSet};
+pub type ParseResult = eventree_wrapper::parser::ParseResult<ParseConfig>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ParseConfig {}
@@ -39,12 +39,12 @@ impl TreeConfig for ParseConfig {
     type TokenKind = TokenKind;
 }
 
-pub type ParseResult = eventree_wrapper::parser::ParseResult<ParseConfig>;
-
-pub fn parse(source: &str) -> ParseResult {
-    let tokens = lex(source);
-    parser::Parser::parse(source, &tokens, parser::assembly)
+pub(crate) mod grammar {
+    pub(crate) use super::parser::assembly;
 }
+pub(crate) use ast::validate;
+
+use eventree_wrapper::{eventree::TreeConfig, parser::TokenSet};
 
 #[cfg(test)]
 mod tests {
@@ -54,7 +54,8 @@ mod tests {
     use expect_test::{expect, Expect};
 
     fn check(source: &str, expect: Expect) -> ParseResult {
-        let ret = parse(source);
+        let tokens = Tokens::tokenize(source);
+        let ret = Parser::parse(source, &tokens, grammar::assembly);
         expect.assert_debug_eq(&ret);
         ret
     }

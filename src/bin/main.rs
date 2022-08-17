@@ -1,6 +1,9 @@
 use clap::Parser;
 use codespan_reporting::term::termcolor::ColorChoice;
-use rust_minivm::{config::{Diagnostic, Process, RunConfig}, Value, Error, VmDiagnostic};
+use rust_minivm::{
+    config::{Diagnostic, Process, RunConfig},
+    Value,
+};
 
 #[derive(Parser)]
 struct Cli {
@@ -10,57 +13,59 @@ struct Cli {
     debug: bool,
 }
 
-fn run<'a>(process: &Process) -> Result<Value, Vec<Error>> {
-    let mut gc = rust_minivm::Gc::new();
-    let bytecode = rust_minivm::compile(process, &mut gc)?;
-    let ret = rust_minivm::run(bytecode.reader(), gc, process).map_err(|e| vec![e.into()])?;
-    Ok(ret)
+fn run<'a>(
+    source: &'a str,
+    file_name: &'a str,
+    config: RunConfig,
+) -> (Process<'a>, Result<Value, Vec<Diagnostic>>) {
+    let process = Process::new(source, file_name, config);
+    let ret = rust_minivm::compile_and_run(&process);
+    (process, ret)
 }
 
-fn run_from_file(path: &str, config: &RunConfig) {
+type RunOutput = (Process<'static>, Result<Value, Vec<Diagnostic>>);
+
+fn run_from_file(path: &str, config: RunConfig) -> Result<RunOutput, Box<dyn std::error::Error>> {
     let path = std::path::Path::new(path);
-    let contents = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(err) => return eprintln!("{err}"),
-    };
+    let contents = std::fs::read_to_string(path)?;
+    let contents = Box::leak(contents.into_boxed_str());
     let file_name = {
-        let os_str = path.file_name().unwrap();
-        os_str.to_str().unwrap()
+        let tmp = path.file_name().unwrap();
+        let tmp = tmp.to_str().unwrap();
+        let tmp = tmp.to_string().into_boxed_str();
+        Box::leak(tmp)
     };
-    let process = Process::new(&contents, file_name, config);
-    if let Err(errors) = run(&process) {
-        let diagnostics = errors.into_iter().map(|e| e.to_diagnostic(&process)).collect();
-        display_diagnostics(diagnostics, &process);
-    }
+    Ok(run(contents, file_name, config))
 }
 
-fn display_diagnostics(diagnostics: Vec<Diagnostic>, process: &Process) {
-    let writer =
-        codespan_reporting::term::termcolor::StandardStream::stderr(ColorChoice::Always);
-    let config = codespan_reporting::term::Config::default();
-
-    for diagnostic in diagnostics {
-        codespan_reporting::term::emit(
-            &mut writer.lock(),
-            &config,
-            process.files(),
-            &diagnostic,
-        ).unwrap();
-    }
-}
-
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Cli = Parser::parse();
     let run_config = RunConfig {
         dump_bytecode: args.debug,
-        dump_internal_bytecode: args.debug,
         trace_execution: args.debug,
-        print_output: args.debug,
     };
 
-    if let Some(path) = &args.file_path {
-        run_from_file(path, &run_config)
+    let (process, out) = if let Some(path) = &args.file_path {
+        run_from_file(path, run_config)?
     } else {
+        // run_repl(run_config)
         todo!("REPL")
+    };
+
+    if let Err(diagnostics) = out {
+        let writer =
+            codespan_reporting::term::termcolor::StandardStream::stderr(ColorChoice::Always);
+        let config = codespan_reporting::term::Config::default();
+
+        for diagnostic in diagnostics {
+            codespan_reporting::term::emit(
+                &mut writer.lock(),
+                &config,
+                process.files(),
+                &diagnostic,
+            )?;
+        }
     }
+
+    Ok(())
 }

@@ -4,7 +4,8 @@ use codespan_reporting::{
 };
 
 pub const NUM_FRAMES: usize = 128;
-pub const NUM_REGISTERS: usize = 16 * NUM_FRAMES;
+pub const NUM_REGISTERS_PER_FRAME: usize = 16;
+pub const NUM_REGISTERS: usize = NUM_REGISTERS_PER_FRAME * NUM_FRAMES;
 
 pub type Files<'a> = SimpleFiles<&'a str, &'a str>;
 pub type File<'a> = SimpleFile<&'a str, &'a str>;
@@ -45,9 +46,7 @@ impl<'a> Process<'a> {
 #[derive(Debug, Copy, Clone)]
 pub struct RunConfig {
     pub dump_bytecode: bool,
-    pub dump_internal_bytecode: bool,
     pub trace_execution: bool,
-    pub print_output: bool,
 }
 
 pub type Diagnostic = codespan_reporting::diagnostic::Diagnostic<FileId>;

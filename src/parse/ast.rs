@@ -79,6 +79,7 @@ ast_node! { <Cfg> pub Root
     fn functions = nodes(Function);
 }
 impl Root {
+    #[must_use]
     pub fn entry_point(self, tree: &SyntaxTree<Cfg>) -> Option<Function> {
         self.functions(tree).find(|f| {
             f.name(tree)
