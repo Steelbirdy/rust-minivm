@@ -1,12 +1,13 @@
 mod error;
+mod jumps;
 mod lower_ast;
 mod repr;
 mod tracing;
 mod visit;
 
 pub use error::{HirError, HirErrorKind};
+pub use jumps::JumpFlags;
 pub use repr::Program;
-pub use tracing::{JumpSet, Jumps};
 
 pub(crate) use lower_ast::LoweringContext;
 pub(crate) use repr::{

@@ -5,7 +5,7 @@ use crate::vm::{
 
 const GC_MIN_THRESHOLD: usize = 1 << 12;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct Ptr(usize);
 

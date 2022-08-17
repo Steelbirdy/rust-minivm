@@ -18,6 +18,12 @@ pub enum ValueKind {
     Ptr = 1,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TaggedValue {
+    Int(Int),
+    Ptr(Ptr),
+}
+
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind() {
@@ -117,6 +123,15 @@ impl Value {
     #[inline]
     pub const fn is_ptr(self) -> bool {
         self.kind() as u8 == ValueKind::Ptr as u8
+    }
+
+    #[must_use]
+    pub const fn tagged(self) -> TaggedValue {
+        if self.is_int() {
+            TaggedValue::Int(self.as_int_unchecked())
+        } else {
+            TaggedValue::Ptr(self.as_ptr_unchecked())
+        }
     }
 
     #[must_use]

@@ -1,108 +1,121 @@
 use crate::{
-    common::Key,
-    hir::{InstructionKind, LabelInfo, Program},
+    common::{Key, Reg},
+    hir::{
+        self, BranchKind, Function, Instruction, JumpKind, KeyWithRange, LabelInfo, Program,
+        UnaryArg,
+    },
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
+use std::marker::PhantomData;
+use std::ops::ControlFlow;
 
-pub type Jumps = FxHashMap<Key, Vec<JumpSet>>;
+pub struct Tracer<'a, F, T: 'a> {
+    program: &'a Program,
+    func: &'a Function,
+    visited: FxHashSet<usize>,
+    callback: F,
+    __phantom: PhantomData<&'a T>,
+}
 
-impl Program {
-    pub(in crate::hir) fn trace_jumps(&mut self) {
-        let keys: Vec<_> = self.functions.keys().copied().collect();
-        for func in keys {
-            self.trace_jumps_in_function(func);
+impl<'a, F, T> Tracer<'a, F, T>
+where
+    F: FnMut(&Instruction) -> ControlFlow<T>,
+{
+    pub fn new(program: &'a Program, func: &'a Function, callback: F) -> Self {
+        Self {
+            program,
+            func,
+            visited: FxHashSet::default(),
+            callback,
+            __phantom: PhantomData,
         }
     }
 
-    fn trace_jumps_in_function(&mut self, name: Key) {
-        use InstructionKind::*;
-
-        let func = self.functions.get_mut(&name).unwrap();
-        let instrs = &mut func.instructions;
-        let mut label_sets = FxHashMap::<Key, JumpSet>::default();
-
-        macro_rules! add_flag_to_labels {
-            ($flag:expr, $($label:expr),+) => {{
-                $(
-                label_sets.entry($label).or_default().insert($flag);
-                )+
-            }};
+    pub fn trace(&mut self, start: usize) -> Option<T> {
+        match self._trace(start) {
+            ControlFlow::Break(value) => value,
+            ControlFlow::Continue(()) => None,
         }
+    }
 
-        for i in 0..instrs.len() {
-            let instr = &mut instrs[i];
+    fn trace_at_label(&mut self, key: Key) -> ControlFlow<Option<T>> {
+        let LabelInfo { func, index, .. } = self.program.labels[&key];
+        assert_eq!(func, self.func.name.value);
+        self._trace(index)
+    }
 
-            match &instr.kind {
-                Exit => {
-                    instr.jumps.insert(JumpFlag::Out);
+    fn _trace(&mut self, mut start: usize) -> ControlFlow<Option<T>> {
+        while start < self.func.instructions.len() {
+            if !self.visited.insert(start) {
+                start += 1;
+                continue;
+            }
+
+            let instr = &self.func.instructions[start];
+            if let ControlFlow::Break(value) = (self.callback)(instr) {
+                return ControlFlow::Break(Some(value));
+            }
+
+            match hir::Visit::visit(self, &instr.kind) {
+                x @ ControlFlow::Break(_) => {
+                    return x;
                 }
-                Branch {
-                    lbl_false,
-                    lbl_true,
-                    ..
-                } => {
-                    instr.jumps.insert(JumpFlag::Out);
-                    add_flag_to_labels!(JumpFlag::In, lbl_false.value, lbl_true.value);
+                ControlFlow::Continue(()) => {
+                    start += 1;
+                    continue;
                 }
-                Jump { lbl, .. } => {
-                    instr.jumps.insert(JumpFlag::Out);
-                    add_flag_to_labels!(JumpFlag::In, lbl.value);
-                }
-                Ret { .. } => {
-                    instr.jumps.insert(JumpFlag::Out);
-                }
-                Label { .. }
-                | Reg { .. }
-                | Call { .. }
-                | Addr { .. }
-                | DJump { .. }
-                | DCall { .. }
-                | Int { .. }
-                | Str { .. }
-                | Binary { .. }
-                | Unary { .. }
-                | Incr { .. }
-                | Decr { .. }
-                | Arr { .. }
-                | Get { .. }
-                | Set { .. }
-                | Len { .. }
-                | Type { .. }
-                | Putc { .. } => {}
             }
         }
+        ControlFlow::Continue(())
+    }
+}
 
-        for (lbl, jumps) in label_sets {
-            let LabelInfo { func, index, .. } = self.labels[&lbl];
-            let func = self.functions.get_mut(&func).unwrap();
-            let instr = &mut func.instructions[index];
-            instr.jumps.insert_all(jumps);
+impl<'a, F, T> hir::Visit for Tracer<'a, F, T>
+where
+    F: FnMut(&Instruction) -> ControlFlow<T>,
+{
+    type Output = ControlFlow<Option<T>>;
+
+    fn unimplemented(&mut self) -> Self::Output {
+        ControlFlow::Continue(())
+    }
+
+    fn visit_exit(&mut self) -> Self::Output {
+        ControlFlow::Break(None)
+    }
+
+    fn visit_branch(
+        &mut self,
+        _kind: BranchKind,
+        lbl_false: KeyWithRange,
+        lbl_true: KeyWithRange,
+    ) -> Self::Output {
+        match self.trace_at_label(lbl_false.value) {
+            x @ ControlFlow::Break(Some(_)) => x,
+            ControlFlow::Break(None) | ControlFlow::Continue(()) => {
+                self.trace_at_label(lbl_true.value)
+            }
         }
     }
-}
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-#[repr(u8)]
-pub enum JumpFlag {
-    In = 1,
-    Out = 2,
-}
-
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub struct JumpSet(u8);
-
-impl JumpSet {
-    pub const EMPTY: JumpSet = JumpSet(0);
-
-    pub fn contains(self, flag: JumpFlag) -> bool {
-        self.0 & (flag as u8) != 0
+    fn visit_jump(&mut self, kind: JumpKind, lbl: KeyWithRange) -> Self::Output {
+        match self.trace_at_label(lbl.value) {
+            x @ ControlFlow::Break(Some(_)) => x,
+            ControlFlow::Break(None) | ControlFlow::Continue(()) => {
+                if kind == JumpKind::Unconditional {
+                    ControlFlow::Break(None)
+                } else {
+                    ControlFlow::Continue(())
+                }
+            }
+        }
     }
 
-    pub fn insert(&mut self, flag: JumpFlag) {
-        self.0 |= flag as u8;
+    fn visit_addr(&mut self, _to: Reg, lbl: KeyWithRange) -> Self::Output {
+        self.trace_at_label(lbl.value).into()
     }
 
-    pub fn insert_all(&mut self, other: Self) {
-        self.0 |= other.0;
+    fn visit_ret(&mut self, _arg: UnaryArg) -> Self::Output {
+        ControlFlow::Break(None)
     }
 }

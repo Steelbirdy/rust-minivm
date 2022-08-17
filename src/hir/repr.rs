@@ -1,9 +1,12 @@
 use crate::{
     common::{list, Int, Key, List, Reg},
-    hir::JumpSet,
+    hir::JumpFlags,
+    vm::Ptr,
 };
 use rustc_hash::FxHashMap;
 use text_size::TextRange;
+
+pub type Index<T> = FxHashMap<Key, T>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Tr<T> {
@@ -13,8 +16,8 @@ pub struct Tr<T> {
 
 #[derive(Debug)]
 pub struct Program {
-    pub functions: FxHashMap<Key, Function>,
-    pub labels: FxHashMap<Key, LabelInfo>,
+    pub functions: Index<Function>,
+    pub labels: Index<LabelInfo>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -52,7 +55,7 @@ impl RegisterUsage {
 pub struct Instruction {
     pub kind: InstructionKind,
     pub range: TextRange,
-    pub jumps: JumpSet,
+    pub jumps: JumpFlags,
 }
 
 impl Instruction {
@@ -60,7 +63,7 @@ impl Instruction {
         Self {
             kind,
             range,
-            jumps: JumpSet::EMPTY,
+            jumps: JumpFlags::EMPTY,
         }
     }
 }
@@ -112,6 +115,11 @@ pub enum InstructionKind {
     Str {
         to: Reg,
         str: KeyWithRange,
+    },
+    /// This instruction is not user-facing: it is emitted only during constant folding.
+    Ptr {
+        to: Reg,
+        ptr: Ptr,
     },
     Binary {
         op: BinaryOp,
@@ -178,7 +186,7 @@ impl InstructionKind {
                 }
             }
             Ret { arg } => arg.register_use([]),
-            Int { to, .. } | Str { to, .. } => RegisterUsage::new([to], []),
+            Int { to, .. } | Str { to, .. } | Ptr { to, .. } => RegisterUsage::new([to], []),
             Binary { to, args, .. } => args.register_use([to]),
             Unary { to, arg, .. } => RegisterUsage::new([to], [arg]),
             Incr { reg } | Decr { reg } => RegisterUsage::new([], [reg]),

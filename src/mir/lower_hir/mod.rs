@@ -1,8 +1,13 @@
+mod fold_constants;
+mod patch_addrs;
+mod registers;
+
+use fold_constants::FoldConstants;
+use patch_addrs::PatchAddrs;
+
 use crate::{
     common::{Int, Interner, Key, List, Reg},
-    hir::{
-        self, BinaryOp, BranchKind, Function, JumpKind, JumpSet, KeyWithRange, Program, UnaryOp,
-    },
+    hir::{self, BinaryOp, BranchKind, Function, JumpKind, KeyWithRange, Program, UnaryOp},
     mir::Instruction,
     vm::{Gc, Value},
 };
@@ -40,6 +45,15 @@ impl From<hir::UnaryArg> for UnaryArg {
     }
 }
 
+impl From<UnaryArg> for hir::UnaryArg {
+    fn from(arg: UnaryArg) -> Self {
+        match arg {
+            UnaryArg::R(reg) => Self::R(reg),
+            UnaryArg::V(val) => Self::I(val.as_int()),
+        }
+    }
+}
+
 enum BinaryArgs {
     RR(Reg, Reg),
     RV(Reg, Value),
@@ -70,6 +84,30 @@ impl From<hir::SetArgs> for BinaryArgs {
     }
 }
 
+impl From<BinaryArgs> for hir::SetArgs {
+    fn from(args: BinaryArgs) -> Self {
+        match args {
+            BinaryArgs::RR(lhs, rhs) => Self::RR(lhs, rhs),
+            BinaryArgs::RV(lhs, rhs) => Self::RI(lhs, rhs.as_int()),
+            BinaryArgs::VR(lhs, rhs) => Self::IR(lhs.as_int(), rhs),
+            BinaryArgs::VV(lhs, rhs) => Self::II(lhs.as_int(), rhs.as_int()),
+        }
+    }
+}
+
+impl TryFrom<BinaryArgs> for hir::BinaryArgs {
+    type Error = ();
+
+    fn try_from(args: BinaryArgs) -> Result<Self, Self::Error> {
+        Ok(match args {
+            BinaryArgs::RR(lhs, rhs) => Self::RR(lhs, rhs),
+            BinaryArgs::RV(lhs, rhs) => Self::RI(lhs, rhs.as_int()),
+            BinaryArgs::VR(lhs, rhs) => Self::IR(lhs.as_int(), rhs),
+            BinaryArgs::VV(..) => return Err(()),
+        })
+    }
+}
+
 pub struct LoweringContext<'a> {
     interner: &'a Interner,
     gc: &'a mut Gc,
@@ -81,7 +119,6 @@ pub struct LoweringContext<'a> {
 struct LowerInstruction<'ctx, 'a> {
     ctx: &'a mut LoweringContext<'ctx>,
     func: &'a Function,
-    jumps: JumpSet,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -103,9 +140,16 @@ impl<'a> LoweringContext<'a> {
         });
         self.label_locs.insert(func.name.value, self.out.len());
 
+        let instructions = self.fold_constants(func);
+        dbg!(&instructions);
+
         let mut lower_instr = LowerInstruction::new(self, func);
+        for instr in instructions {
+            lower_instr.lower(&instr);
+        }
+
         for instr in &func.instructions {
-            lower_instr.lower(instr);
+            lower_instr.lower(&instr.kind);
         }
 
         let end_idx = self.out.len();
@@ -115,6 +159,10 @@ impl<'a> LoweringContext<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn fold_constants(&mut self, func: &Function) -> Vec<hir::InstructionKind> {
+        FoldConstants::new(self).fold(func)
     }
 
     fn patch_addrs(&mut self) {
@@ -133,32 +181,15 @@ impl<'a> LoweringContext<'a> {
     fn push(&mut self, instr: Instruction) {
         self.out.push(instr);
     }
-
-    fn binary_args(&mut self, args: hir::BinaryArgs) -> BinaryArgs {
-        args.into()
-    }
-
-    fn unary_arg(&mut self, arg: hir::UnaryArg) -> UnaryArg {
-        arg.into()
-    }
-
-    fn set_args(&mut self, args: hir::SetArgs) -> BinaryArgs {
-        args.into()
-    }
 }
 
 impl<'ctx, 'a> LowerInstruction<'ctx, 'a> {
     fn new(ctx: &'a mut LoweringContext<'ctx>, func: &'a Function) -> Self {
-        Self {
-            ctx,
-            func,
-            jumps: JumpSet::EMPTY,
-        }
+        Self { ctx, func }
     }
 
-    fn lower(&mut self, instr: &hir::Instruction) {
-        self.jumps = instr.jumps;
-        hir::Visit::visit(self, &instr.kind);
+    fn lower(&mut self, instr: &hir::InstructionKind) {
+        hir::Visit::visit(self, &instr);
     }
 
     fn addr(&mut self, key: Key) -> usize {
@@ -168,34 +199,33 @@ impl<'ctx, 'a> LowerInstruction<'ctx, 'a> {
     fn push(&mut self, instr: Instruction) {
         self.ctx.push(instr);
     }
-
-    fn binary_args(&mut self, args: hir::BinaryArgs) -> BinaryArgs {
-        self.ctx.binary_args(args)
-    }
-
-    fn unary_arg(&mut self, arg: hir::UnaryArg) -> UnaryArg {
-        self.ctx.unary_arg(arg)
-    }
-
-    fn set_args(&mut self, args: hir::SetArgs) -> BinaryArgs {
-        self.ctx.set_args(args)
-    }
 }
 
 impl hir::Visit for LowerInstruction<'_, '_> {
-    fn visit_exit(&mut self) {
+    type Output = ();
+
+    fn unimplemented(&mut self) -> Self::Output {
+        ()
+    }
+
+    fn visit_exit(&mut self) -> Self::Output {
         self.push(Instruction::Exit);
     }
 
-    fn visit_label(&mut self, name: KeyWithRange) {
+    fn visit_label(&mut self, name: KeyWithRange) -> Self::Output {
         self.ctx.label_locs.insert(name.value, self.ctx.out.len());
     }
 
-    fn visit_reg(&mut self, to: Reg, from: Reg) {
+    fn visit_reg(&mut self, to: Reg, from: Reg) -> Self::Output {
         self.push(Instruction::RegR { from, to });
     }
 
-    fn visit_branch(&mut self, kind: BranchKind, lbl_false: KeyWithRange, lbl_true: KeyWithRange) {
+    fn visit_branch(
+        &mut self,
+        kind: BranchKind,
+        lbl_false: KeyWithRange,
+        lbl_true: KeyWithRange,
+    ) -> Self::Output {
         macro_rules! instr {
             ($kind:ident, $($cond:ident),+) => {{
                 let addr_f = self.addr(lbl_false.value);
@@ -206,7 +236,7 @@ impl hir::Visit for LowerInstruction<'_, '_> {
 
         match kind {
             BranchKind::Nz { cond } => instr!(BranchNz, cond),
-            BranchKind::Eq { args } => match self.binary_args(args) {
+            BranchKind::Eq { args } => match BinaryArgs::from(args) {
                 BinaryArgs::RR(lhs, rhs) => instr!(BranchEqRR, lhs, rhs),
                 BinaryArgs::RV(rhs, lhs) | BinaryArgs::VR(lhs, rhs) => {
                     let lhs = lhs.as_int_unchecked();
@@ -218,7 +248,7 @@ impl hir::Visit for LowerInstruction<'_, '_> {
                     self.push(Instruction::Jump { addr });
                 }
             },
-            BranchKind::Lt { args } => match self.binary_args(args) {
+            BranchKind::Lt { args } => match BinaryArgs::from(args) {
                 BinaryArgs::RR(lhs, rhs) => instr!(BranchLtRR, lhs, rhs),
                 BinaryArgs::RV(lhs, rhs) => {
                     let rhs = rhs.as_int_unchecked();
@@ -237,7 +267,7 @@ impl hir::Visit for LowerInstruction<'_, '_> {
         }
     }
 
-    fn visit_jump(&mut self, kind: JumpKind, lbl: KeyWithRange) {
+    fn visit_jump(&mut self, kind: JumpKind, lbl: KeyWithRange) -> Self::Output {
         macro_rules! instr {
             ($kind:ident $(, $cond:ident)*) => {{
                 let addr = self.addr(lbl.value);
@@ -247,7 +277,7 @@ impl hir::Visit for LowerInstruction<'_, '_> {
 
         macro_rules! binary {
             (|$args:ident| $op:tt; $rr:ident, $ir:ident $(, $ri:ident)?) => {
-                match self.binary_args($args) {
+                match BinaryArgs::from($args) {
                     BinaryArgs::RR(lhs, rhs) => instr!($rr, lhs, rhs),
                     BinaryArgs::VR(lhs, rhs) => instr!($ir, lhs, rhs),
                     BinaryArgs::RV(lhs, rhs) => binary!(@ri_body |lhs, rhs| $ir $($ri)?),
@@ -274,62 +304,45 @@ impl hir::Visit for LowerInstruction<'_, '_> {
         }
     }
 
-    fn visit_call(&mut self, to: Reg, func: KeyWithRange, args: &[Reg]) {
+    fn visit_call(&mut self, to: Reg, func: KeyWithRange, args: &[Reg]) -> Self::Output {
         let addr = self.addr(func.value);
         self.push(Instruction::call(addr, args, self.func.regs_used, to));
     }
 
-    fn visit_addr(&mut self, to: Reg, lbl: KeyWithRange) {
+    fn visit_addr(&mut self, to: Reg, lbl: KeyWithRange) -> Self::Output {
         let addr = self.addr(lbl.value);
         self.push(Instruction::RegA { addr, to });
     }
 
-    fn visit_djump(&mut self, kind: JumpKind, lbl: Reg) {
+    fn visit_djump(&mut self, kind: JumpKind, lbl: Reg) -> Self::Output {
         match kind {
             JumpKind::Unconditional => self.push(Instruction::DJump { addr: lbl }),
             _ => panic!("currently only `jump` can be used with a dynamic jump target"),
         }
     }
 
-    fn visit_dcall(&mut self, to: Reg, func: Reg, args: &[Reg]) {
+    fn visit_dcall(&mut self, to: Reg, func: Reg, args: &[Reg]) -> Self::Output {
         self.push(Instruction::dcall(func, args, self.func.regs_used, to));
     }
 
-    fn visit_ret(&mut self, arg: hir::UnaryArg) {
-        match self.unary_arg(arg) {
+    fn visit_ret(&mut self, arg: hir::UnaryArg) -> Self::Output {
+        match UnaryArg::from(arg) {
             UnaryArg::R(reg) => self.push(Instruction::RetR { reg }),
             UnaryArg::V(val) => self.push(Instruction::RetV { val }),
         }
     }
 
-    fn visit_int(&mut self, to: Reg, int: Int) {
+    fn visit_int(&mut self, to: Reg, int: Int) -> Self::Output {
         self.push(Instruction::Value {
             val: Value::int_unchecked(int),
             to,
         });
     }
 
-    fn visit_str(&mut self, to: Reg, str: KeyWithRange) {
-        let gc = &mut *self.ctx.gc;
-
-        let text = self.ctx.interner.lookup(str.value);
-        let num_chars = text.chars().count();
-
-        let ptr = gc.alloc(num_chars.try_into().unwrap());
-        for (i, char) in text.chars().enumerate() {
-            *gc.get_mut(ptr, i) = Value::int(u32::from(char).into());
-        }
-
-        self.push(Instruction::Value {
-            val: Value::ptr(ptr),
-            to,
-        });
-    }
-
-    fn visit_binary(&mut self, op: BinaryOp, to: Reg, args: hir::BinaryArgs) {
+    fn visit_binary(&mut self, op: BinaryOp, to: Reg, args: hir::BinaryArgs) -> Self::Output {
         macro_rules! binary {
             ($rr:ident, $vr:ident $(, $rv:ident)?) => {
-                match self.binary_args(args) {
+                match BinaryArgs::from(args) {
                     BinaryArgs::RR(lhs, rhs) => self.push(Instruction::$rr { lhs, rhs, to }),
                     BinaryArgs::VR(lhs, rhs) => self.push(Instruction::$vr { lhs: lhs.as_int(), rhs, to }),
                     BinaryArgs::RV(lhs, rhs) => binary!(@rv_body |lhs, rhs| $vr $($rv)?),
@@ -353,22 +366,22 @@ impl hir::Visit for LowerInstruction<'_, '_> {
         }
     }
 
-    fn visit_unary(&mut self, op: UnaryOp, to: Reg, arg: Reg) {
+    fn visit_unary(&mut self, op: UnaryOp, to: Reg, arg: Reg) -> Self::Output {
         match op {
             UnaryOp::Neg => self.push(Instruction::Neg { reg: arg, to }),
         }
     }
 
-    fn visit_incr(&mut self, reg: Reg) {
+    fn visit_incr(&mut self, reg: Reg) -> Self::Output {
         self.push(Instruction::Incr { reg });
     }
 
-    fn visit_decr(&mut self, reg: Reg) {
+    fn visit_decr(&mut self, reg: Reg) -> Self::Output {
         self.push(Instruction::Decr { reg });
     }
 
-    fn visit_arr(&mut self, to: Reg, len: hir::UnaryArg) {
-        match self.unary_arg(len) {
+    fn visit_arr(&mut self, to: Reg, len: hir::UnaryArg) -> Self::Output {
+        match UnaryArg::from(len) {
             UnaryArg::R(len) => self.push(Instruction::ArrR { len, to }),
             UnaryArg::V(len) => self.push(Instruction::ArrI {
                 len: len.as_int(),
@@ -377,8 +390,8 @@ impl hir::Visit for LowerInstruction<'_, '_> {
         }
     }
 
-    fn visit_get(&mut self, to: Reg, arr: Reg, idx: hir::UnaryArg) {
-        match self.unary_arg(idx) {
+    fn visit_get(&mut self, to: Reg, arr: Reg, idx: hir::UnaryArg) -> Self::Output {
+        match UnaryArg::from(idx) {
             UnaryArg::R(idx) => self.push(Instruction::GetR { arr, idx, to }),
             UnaryArg::V(idx) => self.push(Instruction::GetI {
                 arr,
@@ -388,8 +401,8 @@ impl hir::Visit for LowerInstruction<'_, '_> {
         }
     }
 
-    fn visit_set(&mut self, arr: Reg, idx_and_val: hir::SetArgs) {
-        match self.set_args(idx_and_val) {
+    fn visit_set(&mut self, arr: Reg, idx_and_val: hir::SetArgs) -> Self::Output {
+        match BinaryArgs::from(idx_and_val) {
             BinaryArgs::RR(idx, val) => self.push(Instruction::SetRR { arr, idx, val }),
             BinaryArgs::RV(idx, val) => self.push(Instruction::SetRI { arr, idx, val }),
             BinaryArgs::VR(idx, val) => self.push(Instruction::SetIR {
@@ -405,85 +418,21 @@ impl hir::Visit for LowerInstruction<'_, '_> {
         }
     }
 
-    fn visit_len(&mut self, to: Reg, arr: Reg) {
+    fn visit_len(&mut self, to: Reg, arr: Reg) -> Self::Output {
         self.push(Instruction::Len { arr, to });
     }
 
-    fn visit_type(&mut self, to: Reg, obj: Reg) {
+    fn visit_type(&mut self, to: Reg, obj: Reg) -> Self::Output {
         self.push(Instruction::Type { obj, to });
     }
 
-    fn visit_putc(&mut self, arg: hir::UnaryArg) {
-        match self.unary_arg(arg) {
+    fn visit_putc(&mut self, arg: hir::UnaryArg) -> Self::Output {
+        match UnaryArg::from(arg) {
             UnaryArg::R(ch) => self.push(Instruction::PutcR { ch }),
             UnaryArg::V(ch) => {
                 let ch = u32::try_from(ch.as_int()).unwrap();
                 self.push(Instruction::PutcI { ch });
             }
         }
-    }
-}
-
-struct PatchAddrs<'ctx, 'a> {
-    ctx: &'a mut LoweringContext<'ctx>,
-    lbls: &'a [Key],
-}
-
-impl<'ctx, 'a> PatchAddrs<'ctx, 'a> {
-    fn new(ctx: &'a mut LoweringContext<'ctx>) -> Self {
-        Self { ctx, lbls: &[] }
-    }
-
-    fn patch(&mut self, ref_index: usize, lbls: &'a [Key]) {
-        use Instruction::*;
-
-        self.lbls = lbls;
-        let mut i = 0;
-        #[allow(non_snake_case)]
-        macro_rules! L {
-            ($($index:literal -> $field:ident),+) => {{
-                $(
-                i += 1;
-                *$field = self.ctx.label_locs[&lbls[$index]];
-                )+
-            }};
-        }
-
-        match &mut self.ctx.out[ref_index] {
-            Func { end, .. } => L!(0 -> end),
-            RegA { addr, .. } => L!(0 -> addr),
-            BranchNz { addr_f, addr_t, .. }
-            | BranchEqRR { addr_f, addr_t, .. }
-            | BranchEqIR { addr_f, addr_t, .. }
-            | BranchLtRR { addr_f, addr_t, .. }
-            | BranchLtRI { addr_f, addr_t, .. }
-            | BranchLtIR { addr_f, addr_t, .. } => L!(0 -> addr_f, 1 -> addr_t),
-            Jump { addr }
-            | JumpEz { addr, .. }
-            | JumpNz { addr, .. }
-            | JumpLtRR { addr, .. }
-            | JumpLtRI { addr, .. }
-            | JumpLtIR { addr, .. }
-            | JumpLeRR { addr, .. }
-            | JumpLeRI { addr, .. }
-            | JumpLeIR { addr, .. }
-            | JumpEqRR { addr, .. }
-            | JumpEqIR { addr, .. }
-            | JumpNeRR { addr, .. }
-            | JumpNeIR { addr, .. }
-            | Call0 { addr, .. }
-            | Call1 { addr, .. }
-            | Call2 { addr, .. }
-            | Call3 { addr, .. }
-            | Call4 { addr, .. }
-            | Call5 { addr, .. }
-            | Call6 { addr, .. }
-            | Call7 { addr, .. }
-            | Call8 { addr, .. }
-            | CallL { addr, .. } => L!(0 -> addr),
-            x => unreachable!("{x:?}"),
-        }
-
-        assert_eq!(i, lbls.len(), "{:?}", self.ctx.out[ref_index]);
     }
 }

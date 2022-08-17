@@ -10,7 +10,7 @@ pub use gc::Gc;
 pub use lower_mir::lower_mir;
 pub use opcode::Opcode;
 pub use run::Vm;
-pub use value::{Value, ValueKind};
+pub use value::{TaggedValue, Value, ValueKind};
 
 pub type Ptr = gc::Ptr;
 pub type Len = u32;

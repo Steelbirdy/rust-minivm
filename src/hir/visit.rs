@@ -3,6 +3,7 @@ use crate::{
     hir::{
         self, BinaryArgs, BinaryOp, BranchKind, JumpKind, KeyWithRange, SetArgs, UnaryArg, UnaryOp,
     },
+    vm::Ptr,
 };
 
 visit_trait![hir::InstructionKind:
@@ -18,6 +19,7 @@ visit_trait![hir::InstructionKind:
     Ret => visit_ret(arg: UnaryArg);
     Int => visit_int(to: Reg, int: Int);
     Str => visit_str(to: Reg, str: KeyWithRange);
+    Ptr => visit_ptr(to: Reg, ptr: Ptr);
     Binary => visit_binary(op: BinaryOp, to: Reg, args: BinaryArgs);
     Unary => visit_unary(op: UnaryOp, to: Reg, arg: Reg);
     Incr => visit_incr(reg: Reg);

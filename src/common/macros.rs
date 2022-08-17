@@ -2,7 +2,11 @@ macro_rules! visit_trait {
     [$instr:ty: $($variant:ident => $func:ident($($($([$borrow:tt])? $arg:ident: $arg_ty:ty),+)?);)+] => {
         #[allow(unused)]
         pub trait Visit {
-            fn visit(&mut self, instr: &$instr) {
+            type Output;
+
+            fn unimplemented(&mut self) -> Self::Output;
+
+            fn visit(&mut self, instr: &$instr) -> Self::Output {
                 use $instr::*;
 
                 match instr {
@@ -13,7 +17,10 @@ macro_rules! visit_trait {
             }
 
             $(
-            fn $func(&mut self $($(, $arg: $arg_ty)+)?) {}
+            #[inline]
+            fn $func(&mut self $($(, $arg: $arg_ty)+)?) -> Self::Output {
+                self.unimplemented()
+            }
             )+
         }
     };
