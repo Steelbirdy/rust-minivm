@@ -1,6 +1,6 @@
-use crate::{Diagnostic, Process, vm::Ptr, VmDiagnostic};
-use std::fmt;
+use crate::{vm::Ptr, Diagnostic, Process, VmDiagnostic};
 use codespan_reporting::diagnostic::Severity;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeError {
@@ -15,10 +15,9 @@ impl VmDiagnostic for RuntimeError {
 
     fn to_diagnostic(&self, _process: &Process) -> Diagnostic {
         match self {
-            Self::OutOfBounds { ptr, index, len } => {
-                Diagnostic::error()
-                    .with_message(format!("index out of bounds: index was {index} but array at 0x{ptr} has length {len}"))
-            }
+            Self::OutOfBounds { ptr, index, len } => Diagnostic::error().with_message(format!(
+                "index out of bounds: index was {index} but array at 0x{ptr} has length {len}"
+            )),
             Self::StackOverflow => Diagnostic::error().with_message("stack overflow"),
         }
     }

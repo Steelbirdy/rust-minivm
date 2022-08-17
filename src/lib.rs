@@ -16,7 +16,7 @@ mod vm;
 
 pub use common::{
     config::{self, Diagnostic, Process},
-    BytecodeReader, Interner,
+    BytecodeBuffer, BytecodeReader, Interner,
 };
 pub use vm::{disassemble as disassemble_opcode, lower_mir, Gc, Value, Vm};
 
@@ -73,7 +73,7 @@ pub fn build_mir(
     Ok(mir::lower_hir(hir, interner, gc))
 }
 
-pub fn build_bytecode(mir: &[mir::Instruction], _process: &Process) -> Result<Box<[u8]>> {
+pub fn build_bytecode(mir: &[mir::Instruction], _process: &Process) -> Result<BytecodeBuffer> {
     Ok(vm::lower_mir(mir))
 }
 
@@ -88,7 +88,7 @@ pub fn run(bytecode: BytecodeReader, gc: Gc, process: &Process) -> Result<Value>
     trace!("=== EXECUTION ===");
     let ret = Vm::new(bytecode, gc, &process.config).run();
     trace!("===           ===");
-    Ok(ret)
+    ret.map_err(|err| vec![err.to_diagnostic(process)])
 }
 
 pub fn compile_and_run(process: &Process) -> Result<Value> {
@@ -108,13 +108,12 @@ pub fn compile_and_run(process: &Process) -> Result<Value> {
 
     // Bytecode Generation (MIR -> Bytecode)
     let bytecode = build_bytecode(&instructions, process)?;
-    let reader = BytecodeReader::new(&bytecode);
     if process.config.dump_bytecode {
         println!("=== BYTECODE ===");
-        println!("{}", disassemble_opcode(reader, &mut gc));
+        println!("{}", disassemble_opcode(bytecode.reader(), &mut gc));
         println!("================\n");
     }
 
     // Execution
-    run(reader, gc, process)
+    run(bytecode.reader(), gc, process)
 }

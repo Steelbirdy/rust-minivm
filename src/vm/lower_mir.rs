@@ -1,5 +1,5 @@
 use crate::{
-    common::{Addr, BytecodeBuilder, Int, Reg},
+    common::{Addr, BytecodeBuffer, BytecodeBuilder, Int, Reg},
     mir::{self, Instruction},
     vm::{Opcode, Value},
 };
@@ -8,11 +8,11 @@ type MirIndex = usize;
 type ByteIndex = usize;
 
 #[must_use]
-pub fn lower_mir(instructions: &[Instruction]) -> Box<[u8]> {
+pub fn lower_mir(instructions: &[Instruction]) -> BytecodeBuffer {
     let mut ctx = LoweringContext::new();
     ctx.lower(instructions);
     ctx.patch_references();
-    ctx.builder.into_inner()
+    ctx.builder.finish()
 }
 
 struct LoweringContext {
