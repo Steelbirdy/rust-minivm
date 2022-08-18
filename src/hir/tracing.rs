@@ -31,7 +31,11 @@ where
         }
     }
 
-    pub fn trace(&mut self, start: usize) -> Option<T> {
+    pub fn trace(&mut self) -> Option<T> {
+        self.trace_at(0)
+    }
+
+    pub fn trace_at(&mut self, start: usize) -> Option<T> {
         match self._trace(start) {
             ControlFlow::Break(value) => value,
             ControlFlow::Continue(()) => None,

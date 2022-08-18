@@ -147,7 +147,6 @@ impl Gc {
     }
 
     #[must_use]
-    #[cfg(feature = "check-bounds")]
     fn array_len_usize(&self, ptr: Ptr) -> usize {
         self.buf[ptr.0 - 1].header().len()
     }
@@ -158,7 +157,11 @@ impl Gc {
         if idx < len {
             Ok(())
         } else {
-            Err(RuntimeError::OutOfBounds { ptr, index: idx, len })
+            Err(RuntimeError::OutOfBounds {
+                ptr,
+                index: idx,
+                len,
+            })
         }
     }
 
@@ -166,6 +169,9 @@ impl Gc {
     #[must_use]
     pub fn array(&self, ptr: Ptr) -> &[Value] {
         let len = self.array_len_usize(ptr);
+
+        #[cfg(not(feature = "unsafe"))]
+        assert!(ptr.0 + len <= self.buf.len());
         unsafe {
             let heap_ptr = self.buf.as_ptr().add(ptr.0).cast::<Value>();
             std::slice::from_raw_parts(heap_ptr, len)

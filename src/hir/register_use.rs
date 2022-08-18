@@ -31,6 +31,6 @@ impl<'a> RegisterUse<'a> {
         }
 
         let mut tracer = Tracer::new(self.program, self.func, |instr| callback(reg, instr));
-        tracer.trace(start).unwrap_or_default()
+        tracer.trace_at(start).unwrap_or_default()
     }
 }
